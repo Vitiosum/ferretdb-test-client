@@ -166,8 +166,10 @@ const routes = {
     await col.createIndex({ kind: 1, v: 1 });
     report.index_creation_ms = Date.now() - tIdx;
 
-    // 3. FIND BY _id (500 lookups random)
-    const sample = await col.aggregate([{ $sample: { size: 500 } }, { $project: { _id: 1 } }]).toArray();
+    // 3. FIND BY _id (500 lookups random) — random pick côté JS pour compat FerretDB v1 (pas de $sample)
+    const allIds = await col.find({}, { projection: { _id: 1 } }).toArray();
+    const sample = [];
+    for (let k = 0; k < 500; k++) sample.push(allIds[Math.floor(Math.random() * allIds.length)]);
     const findIdLat = [];
     for (const { _id } of sample) {
       const t = Date.now();
