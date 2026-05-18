@@ -214,7 +214,7 @@ const routes = {
       const t = Date.now();
       await col.aggregate([
         { $match: { v: { $lt: 0.5 } } },
-        { $group: { _id: '$kind', cnt: { $sum: 1 }, avg_v: { $avg: '$v' }, max_v: { $max: '$v' } } },
+        { $group: { _id: '$kind', cnt: { $sum: 1 }, total_v: { $sum: '$v' } } },
         { $sort: { cnt: -1 } },
       ]).toArray();
       aggLat.push(Date.now() - t);
