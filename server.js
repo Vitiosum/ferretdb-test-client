@@ -126,6 +126,107 @@ const routes = {
     return { inserted: r.insertedCount, ms, throughput_per_sec: Math.round(r.insertedCount / (ms / 1000)) };
   },
 
+  '/bench': async () => {
+    const db = await getDb();
+    const col = db.collection('bench');
+    await col.drop().catch(() => {});
+
+    const stats = (samples) => {
+      const s = [...samples].sort((a, b) => a - b);
+      const p = (q) => s[Math.min(s.length - 1, Math.floor(s.length * q))];
+      const sum = s.reduce((a, b) => a + b, 0);
+      return { n: s.length, min: s[0], p50: p(0.5), p95: p(0.95), p99: p(0.99), max: s[s.length - 1], avg_ms: +(sum / s.length).toFixed(3) };
+    };
+
+    const report = {};
+
+    // 1. INSERT 5000 docs (bulk by chunks of 500 pour mesurer chaque chunk)
+    const N = 5000;
+    const insertLatencies = [];
+    const t0Insert = Date.now();
+    for (let i = 0; i < N; i += 500) {
+      const ops = Array.from({ length: 500 }, (_, j) => ({
+        insertOne: { document: { i: i + j, kind: ['a', 'b', 'c'][(i + j) % 3], v: Math.random(), payload: 'x'.repeat(200) } },
+      }));
+      const t0 = Date.now();
+      await col.bulkWrite(ops, { ordered: false });
+      insertLatencies.push(Date.now() - t0);
+    }
+    const insertTotalMs = Date.now() - t0Insert;
+    report.insert = {
+      n_docs: N,
+      total_ms: insertTotalMs,
+      throughput_docs_per_sec: Math.round(N / (insertTotalMs / 1000)),
+      batch_latency_ms: stats(insertLatencies),
+    };
+
+    // 2. INDEX creation
+    const tIdx = Date.now();
+    await col.createIndex({ i: 1 });
+    await col.createIndex({ kind: 1, v: 1 });
+    report.index_creation_ms = Date.now() - tIdx;
+
+    // 3. FIND BY _id (500 lookups random)
+    const sample = await col.aggregate([{ $sample: { size: 500 } }, { $project: { _id: 1 } }]).toArray();
+    const findIdLat = [];
+    for (const { _id } of sample) {
+      const t = Date.now();
+      await col.findOne({ _id });
+      findIdLat.push(Date.now() - t);
+    }
+    report.find_by_id = stats(findIdLat);
+
+    // 4. FIND WITH INDEX (i-based equality, 500 fois)
+    const findIdxLat = [];
+    for (let k = 0; k < 500; k++) {
+      const i = Math.floor(Math.random() * N);
+      const t = Date.now();
+      await col.findOne({ i });
+      findIdxLat.push(Date.now() - t);
+    }
+    report.find_indexed = stats(findIdxLat);
+
+    // 5. RANGE QUERY (100 fois)
+    const rangeLat = [];
+    for (let k = 0; k < 100; k++) {
+      const start = Math.floor(Math.random() * (N - 100));
+      const t = Date.now();
+      await col.find({ i: { $gte: start, $lt: start + 100 } }).toArray();
+      rangeLat.push(Date.now() - t);
+    }
+    report.range_100docs = stats(rangeLat);
+
+    // 6. UPDATE (200 fois, $set + $inc)
+    const updateLat = [];
+    for (let k = 0; k < 200; k++) {
+      const i = Math.floor(Math.random() * N);
+      const t = Date.now();
+      await col.updateOne({ i }, { $set: { touched: new Date() }, $inc: { hits: 1 } });
+      updateLat.push(Date.now() - t);
+    }
+    report.update = stats(updateLat);
+
+    // 7. AGGREGATION pipeline
+    const aggLat = [];
+    for (let k = 0; k < 50; k++) {
+      const t = Date.now();
+      await col.aggregate([
+        { $match: { v: { $lt: 0.5 } } },
+        { $group: { _id: '$kind', cnt: { $sum: 1 }, avg_v: { $avg: '$v' }, max_v: { $max: '$v' } } },
+        { $sort: { cnt: -1 } },
+      ]).toArray();
+      aggLat.push(Date.now() - t);
+    }
+    report.aggregation = stats(aggLat);
+
+    // 8. DELETE (cleanup, single shot)
+    const tDel = Date.now();
+    const del = await col.deleteMany({});
+    report.delete_all = { n: del.deletedCount, ms: Date.now() - tDel };
+
+    return report;
+  },
+
   '/test/cleanup': async () => {
     const db = await getDb();
     const cols = ['items', 'crud_test', 'agg_test', 'idx_test', 'bulk_test'];
