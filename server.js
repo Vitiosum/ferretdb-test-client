@@ -517,6 +517,147 @@ const routes = {
     }
   },
 
+  // ─── Patterns MongoDB réels — au-delà des opérateurs, des cas d'usage app concrets ───
+  '/api/pattern/schema_flex': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_products');
+    await col.drop().catch(() => {});
+    await col.insertOne({ name: 'Mug', price: 12 });
+    await col.insertOne({ name: 'T-shirt', price: 25, color: 'navy', size: 'L', weight_g: 180 });
+    await col.insertOne({ title: 'Box subscription', monthly_price: 39, includes: ['mug', 'tshirt'], options: { gift_wrap: true, eta_days: 3 } });
+    const docs = await col.find({}).toArray();
+    return { ok: true, narrative: '3 documents, schémas totalement différents, même collection. Aucun ALTER TABLE.', docs };
+  },
+
+  '/api/pattern/list_paginate': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_paginate');
+    await col.drop().catch(() => {});
+    const seed = Array.from({ length: 50 }, (_, i) => ({ i, price: Math.floor(Math.random() * 200) + 10, name: 'item-' + i }));
+    await col.insertMany(seed);
+    await col.createIndex({ price: -1 });
+    const PAGE_SIZE = 5, PAGE = 3;
+    const t0 = Date.now();
+    const rows = await col.find({ price: { $gte: 50 } }).sort({ price: -1 }).skip(PAGE_SIZE * (PAGE - 1)).limit(PAGE_SIZE).toArray();
+    const total = await col.countDocuments({ price: { $gte: 50 } });
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: `find({price:{$gte:50}}).sort({price:-1}).skip(${PAGE_SIZE * (PAGE - 1)}).limit(${PAGE_SIZE})`,
+      total_matching: total,
+      page: PAGE,
+      page_size: PAGE_SIZE,
+      latency_ms: Date.now() - t0,
+      rows: rows.map(r => ({ i: r.i, name: r.name, price: r.price })),
+    };
+  },
+
+  '/api/pattern/nested_update': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_nested');
+    await col.drop().catch(() => {});
+    await col.insertOne({ name: 'Alice', address: { city: 'Lyon', street: '12 rue X', zip: '69001' }, age: 30 });
+    const before = await col.findOne({ name: 'Alice' });
+    await col.updateOne({ name: 'Alice' }, { $set: { 'address.city': 'Paris', 'address.zip': '75001' } });
+    const after = await col.findOne({ name: 'Alice' });
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: "$set: { 'address.city': 'Paris', 'address.zip': '75001' } — modifie 2 champs imbriqués sans toucher le reste",
+      before, after,
+    };
+  },
+
+  '/api/pattern/array_ops': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_array');
+    await col.drop().catch(() => {});
+    await col.insertOne({ name: 'doc', tags: ['alpha', 'beta'] });
+    const steps = [];
+    steps.push({ op: 'initial', tags: (await col.findOne({ name: 'doc' })).tags });
+    await col.updateOne({ name: 'doc' }, { $push: { tags: 'gamma' } });
+    steps.push({ op: "$push 'gamma'", tags: (await col.findOne({ name: 'doc' })).tags });
+    await col.updateOne({ name: 'doc' }, { $addToSet: { tags: 'beta' } });
+    steps.push({ op: "$addToSet 'beta' (doublon ignoré)", tags: (await col.findOne({ name: 'doc' })).tags });
+    await col.updateOne({ name: 'doc' }, { $pull: { tags: 'alpha' } });
+    steps.push({ op: "$pull 'alpha'", tags: (await col.findOne({ name: 'doc' })).tags });
+    await col.drop().catch(() => {});
+    return { ok: true, narrative: 'Manipulation directe du tableau tags sans le ré-écrire entièrement', steps };
+  },
+
+  '/api/pattern/upsert': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_upsert');
+    await col.drop().catch(() => {});
+    const r1 = await col.updateOne({ sku: 'XYZ-001' }, { $set: { name: 'Widget', price: 99 }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+    const r2 = await col.updateOne({ sku: 'XYZ-001' }, { $set: { price: 79, lastUpdate: new Date() } }, { upsert: true });
+    const finalDoc = await col.findOne({ sku: 'XYZ-001' });
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: "updateOne(..., { upsert: true }) — premier appel crée, deuxième met à jour. Idempotent.",
+      first_call: { matched: r1.matchedCount, upserted: !!r1.upsertedId, id: r1.upsertedId ? String(r1.upsertedId) : null },
+      second_call: { matched: r2.matchedCount, modified: r2.modifiedCount, upserted: !!r2.upsertedId },
+      final: finalDoc,
+    };
+  },
+
+  '/api/pattern/distinct': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_distinct');
+    await col.drop().catch(() => {});
+    await col.insertMany([
+      { category: 'books', title: 'A' },
+      { category: 'tools', title: 'B' },
+      { category: 'books', title: 'C' },
+      { category: 'food',  title: 'D' },
+      { category: 'tools', title: 'E' },
+    ]);
+    const t0 = Date.now();
+    const cats = await col.distinct('category');
+    const latency_ms = Date.now() - t0;
+    await col.drop().catch(() => {});
+    return { ok: true, narrative: "col.distinct('category') — valeurs uniques (utile pour filtres UI)", categories: cats.sort(), latency_ms };
+  },
+
+  '/api/pattern/operators': async () => {
+    const db = await getDb();
+    const col = db.collection('pat_ops');
+    await col.drop().catch(() => {});
+    await col.insertMany([
+      { name: 'Alice', age: 30, role: 'admin', city: 'Paris' },
+      { name: 'Bob', age: 25, role: 'user', city: 'Lyon' },
+      { name: 'Carol', age: 35, role: 'admin', city: 'Paris' },
+      { name: 'Dan', age: 40, role: 'user' },
+      { name: 'Eve', age: 28, role: 'guest', city: 'Marseille' },
+    ]);
+    const q = { $and: [{ role: { $in: ['admin', 'user'] } }, { $or: [{ city: 'Paris' }, { age: { $gte: 40 } }] }, { city: { $exists: true } }] };
+    const matched = await col.find(q).toArray();
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: '$and + $or + $in + $exists + $gte combinés en un seul filtre',
+      query: q,
+      matched_count: matched.length,
+      results: matched.map(d => ({ name: d.name, role: d.role, city: d.city, age: d.age })),
+    };
+  },
+
+  '/api/explain': async () => {
+    const db = await getDb();
+    const col = db.collection('explain_target');
+    await col.drop().catch(() => {});
+    await col.insertMany(Array.from({ length: 200 }, (_, i) => ({ i, kind: ['a', 'b', 'c'][i % 3], v: Math.random() })));
+    await col.createIndex({ kind: 1, v: 1 });
+    const explain = await col.find({ kind: 'a', v: { $gte: 0.5 } }).explain('executionStats');
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: "find({kind:'a', v:{$gte:0.5}}).explain('executionStats') — FerretDB retourne le plan PostgreSQL sous-jacent",
+      explain,
+    };
+  },
+
   '/api/compat/change_stream': async () => {
     const db = await getDb();
     const col = db.collection('compat_cs');
@@ -617,6 +758,35 @@ button.danger:hover{background:hsl(0,75%,50%,0.1)}
 .compat-state.ok{color:#22c55e}
 .compat-state.err{color:#ef4444}
 .compat-state.pending{color:hsl(0,0%,50%)}
+.scorecard{display:grid;grid-template-columns:200px 1fr;gap:24px;background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:12px;padding:22px 24px;margin-bottom:16px;align-items:center}
+.score-main{text-align:center}
+.score-big{font-family:'DM Mono',monospace;font-size:3.2rem;font-weight:300;line-height:1;color:#3b82f6;letter-spacing:-0.04em}
+.score-label{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:hsl(0,0%,55%);margin-top:8px}
+.score-bars{display:flex;flex-direction:column;gap:10px}
+.score-bar{display:grid;grid-template-columns:140px 1fr 70px;gap:14px;align-items:center;font-size:12px}
+.score-bar-name{color:hsl(0,0%,75%);font-weight:500}
+.score-bar-track{height:8px;background:hsl(0,0%,16%);border-radius:4px;overflow:hidden;position:relative}
+.score-bar-fill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#3b82f6,#2563eb);border-radius:4px;transition:width 0.5s ease-out}
+.score-bar-val{font-family:'DM Mono',monospace;color:hsl(0,0%,85%);font-size:11px;text-align:right;font-variant-numeric:tabular-nums}
+@media(max-width:680px){.scorecard{grid-template-columns:1fr}.score-bar{grid-template-columns:1fr 1fr 60px}.score-bar-name{font-size:11px}}
+.pattern-out{background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:12px;padding:16px;min-height:80px;margin-top:14px;font-size:12px;overflow-x:auto}
+.pattern-narrative{color:#60a5fa;font-size:11px;margin-bottom:12px;padding:8px 12px;background:rgba(59,130,246,0.06);border-radius:6px;border-left:2px solid #3b82f6}
+.pattern-block{background:hsl(0,0%,8%);border:1px solid hsl(0,0%,16%);border-radius:8px;padding:12px;margin-bottom:8px;font-family:'DM Mono',monospace;font-size:11px;color:hsl(0,0%,85%);white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto}
+.pattern-block.tight{padding:8px 12px;font-size:11px}
+.pattern-doc-row{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:4px 0;border-bottom:1px solid hsl(0,0%,14%)}
+.pattern-doc-row:last-child{border-bottom:none}
+.pattern-doc-key{color:hsl(0,0%,50%);font-family:'DM Mono',monospace;font-size:10px}
+.pattern-doc-val{color:hsl(0,0%,90%);font-family:'DM Mono',monospace;font-size:11px;word-break:break-word}
+.pattern-step{display:grid;grid-template-columns:160px 1fr;gap:14px;padding:6px 0;border-bottom:1px dotted hsl(0,0%,18%)}
+.pattern-step:last-child{border-bottom:none}
+.pattern-step-op{color:#60a5fa;font-family:'DM Mono',monospace;font-size:11px}
+.pattern-step-val{color:hsl(0,0%,90%);font-family:'DM Mono',monospace;font-size:11px}
+.pattern-table{width:100%;border-collapse:collapse;font-family:'DM Mono',monospace;font-size:11px}
+.pattern-table th{text-align:left;padding:6px 10px;border-bottom:1px solid hsl(0,0%,20%);color:hsl(0,0%,55%);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+.pattern-table td{padding:6px 10px;border-bottom:1px solid hsl(0,0%,14%);color:hsl(0,0%,85%)}
+.pattern-table tr:last-child td{border-bottom:none}
+.diff-old{background:rgba(239,68,68,0.08);color:#fca5a5}
+.diff-new{background:rgba(34,197,94,0.08);color:#86efac}
 footer{padding:40px 0 60px;color:hsl(0,0%,40%);font-size:11px;text-align:center}
 footer a{color:#60a5fa;text-decoration:none}
 .muted{color:hsl(0,0%,50%);font-size:11px;margin-left:8px}
@@ -653,27 +823,60 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="section-title">Activity feed</div>
 <div class="feed" id="feed"><div class="feed-empty">Pas encore d'activité — clique sur une action ci-dessus</div></div>
 </section>
+<section class="section">
+<div class="section-title">Patterns MongoDB réels — cas d'usage app concrets</div>
+<div class="actions">
+<button id="pat-schema">Schema flexibility (3 shapes même collection)</button>
+<button id="pat-paginate">Filter + sort + paginate</button>
+<button id="pat-nested">Update champ imbriqué ($set 'address.city')</button>
+<button id="pat-array">Array ops ($push / $addToSet / $pull)</button>
+<button id="pat-upsert">Upsert idempotent</button>
+<button id="pat-distinct">distinct('category')</button>
+<button id="pat-operators">$and + $or + $in + $exists</button>
+</div>
+<div class="pattern-out" id="pattern-out"><div class="feed-empty" style="padding:30px;text-align:center;color:hsl(0,0%,40%)">Clique sur un pattern pour voir le résultat ici</div></div>
+</section>
+
+<section class="section">
+<div class="section-title">Plan SQL sous le capot</div>
+<p class="muted" style="margin:0 0 12px 0">FerretDB traduit chaque requête Mongo en SQL côté PostgreSQL. <code>explain()</code> retourne le plan PG, preuve directe.</p>
+<div class="actions"><button id="btn-explain">Afficher le plan PostgreSQL</button></div>
+<div class="pattern-out" id="explain-out" style="margin-top:14px"></div>
+</section>
+
 <section class="section" id="bench-section" style="display:none">
 <div class="section-title">Dernier quick bench</div>
 <div class="bench-grid" id="bench-grid"></div>
 </section>
 <section class="section">
 <div class="section-title">Compatibilité MongoDB testée live</div>
+<div class="scorecard" id="scorecard">
+  <div class="score-main">
+    <div class="score-big" id="score-big">—</div>
+    <div class="score-label">features Mongo supportées</div>
+  </div>
+  <div class="score-bars">
+    <div class="score-bar" data-cat="crud"><span class="score-bar-name">CRUD &amp; queries</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-crud"></span></span><span class="score-bar-val" id="val-crud">…</span></div>
+    <div class="score-bar" data-cat="index"><span class="score-bar-name">Indexing</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-index"></span></span><span class="score-bar-val" id="val-index">…</span></div>
+    <div class="score-bar" data-cat="agg"><span class="score-bar-name">Aggregation</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-agg"></span></span><span class="score-bar-val" id="val-agg">…</span></div>
+    <div class="score-bar" data-cat="adv"><span class="score-bar-name">Advanced</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-adv"></span></span><span class="score-bar-val" id="val-adv">…</span></div>
+  </div>
+</div>
 <div class="compat-grid" id="compat-grid">
-<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index simple</span><span class="compat-state pending" data-test="index_simple">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index unique</span><span class="compat-state pending" data-test="index_unique">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index composé</span><span class="compat-state pending" data-test="index_compound">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $sum</span><span class="compat-state pending" data-test="group_sum">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $avg</span><span class="compat-state pending" data-test="group_avg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $max/$min</span><span class="compat-state pending" data-test="group_max_min">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$sample</span><span class="compat-state pending" data-test="sample">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$lookup (JOIN)</span><span class="compat-state pending" data-test="lookup">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$regex</span><span class="compat-state pending" data-test="regex">pending</span></div>
-<div class="compat-pill"><span class="compat-name">bulkWrite</span><span class="compat-state pending" data-test="bulk_write">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$text search</span><span class="compat-state pending" data-test="text_search">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Transactions multi-doc</span><span class="compat-state pending" data-test="transaction">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Change streams</span><span class="compat-state pending" data-test="change_stream">pending</span></div>
+<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud" data-cat="crud">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$regex</span><span class="compat-state pending" data-test="regex" data-cat="crud">pending</span></div>
+<div class="compat-pill"><span class="compat-name">bulkWrite</span><span class="compat-state pending" data-test="bulk_write" data-cat="crud">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index simple</span><span class="compat-state pending" data-test="index_simple" data-cat="index">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index unique</span><span class="compat-state pending" data-test="index_unique" data-cat="index">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index composé</span><span class="compat-state pending" data-test="index_compound" data-cat="index">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$text search</span><span class="compat-state pending" data-test="text_search" data-cat="index">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $sum</span><span class="compat-state pending" data-test="group_sum" data-cat="agg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $avg</span><span class="compat-state pending" data-test="group_avg" data-cat="agg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $max/$min</span><span class="compat-state pending" data-test="group_max_min" data-cat="agg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$sample</span><span class="compat-state pending" data-test="sample" data-cat="agg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$lookup (JOIN)</span><span class="compat-state pending" data-test="lookup" data-cat="agg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Transactions multi-doc</span><span class="compat-state pending" data-test="transaction" data-cat="adv">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Change streams</span><span class="compat-state pending" data-test="change_stream" data-cat="adv">pending</span></div>
 </div>
 <div class="actions" style="margin-top:14px"><button id="btn-compat">Lancer les tests compat</button></div>
 </section>
@@ -774,9 +977,115 @@ function setCompat(name, ok, detail) {
   el2.textContent = ok ? '✓ OK' : '✗ KO';
   if (detail) el2.title = detail;
 }
+// ─── Patterns Mongo réels ───
+const patternOut = $('pattern-out');
+function clearPatternOut() { while (patternOut.firstChild) patternOut.removeChild(patternOut.firstChild); }
+function patternNarrative(text) { const d = el('div', 'pattern-narrative', text); patternOut.appendChild(d); }
+function patternBlock(text, tight) { const d = el('pre', 'pattern-block' + (tight ? ' tight' : ''), typeof text === 'string' ? text : JSON.stringify(text, null, 2)); patternOut.appendChild(d); }
+function patternHeading(text) { const d = el('div', null, text); d.style.cssText = 'font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:hsl(0,0%,55%);margin:10px 0 6px 0'; patternOut.appendChild(d); }
+function patternError(msg) { const d = el('div', 'pattern-block'); d.style.color = '#fca5a5'; d.textContent = '❌ ' + msg; patternOut.appendChild(d); }
+
+async function runPattern(ep, title, render) {
+  clearPatternOut();
+  patternHeading(title);
+  const loading = el('div', null, 'Chargement…');
+  loading.style.color = 'hsl(0,0%,50%)';
+  patternOut.appendChild(loading);
+  try {
+    const r = await api(ep);
+    patternOut.removeChild(loading);
+    if (r.narrative) patternNarrative(r.narrative);
+    render(r);
+    addRow('pattern', title + ' ✓', true);
+  } catch (e) {
+    patternOut.removeChild(loading);
+    patternError(e.message);
+    addRow('pattern', title + ' ❌ ' + e.message, false);
+  }
+}
+
+$('pat-schema').onclick = () => runPattern('/api/pattern/schema_flex', 'Schema flexibility', r => {
+  r.docs.forEach((d, i) => { patternHeading('Document #' + (i + 1)); patternBlock(d, true); });
+});
+$('pat-paginate').onclick = () => runPattern('/api/pattern/list_paginate', 'Filter + sort + paginate', r => {
+  patternBlock('Total matching price >= 50 : ' + r.total_matching + '\\nPage : ' + r.page + ' (taille ' + r.page_size + ')\\nLatency : ' + r.latency_ms + ' ms', true);
+  const table = el('table', 'pattern-table');
+  const thead = el('thead'); const trh = el('tr'); ['i', 'name', 'price'].forEach(k => trh.appendChild(el('th', null, k))); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = el('tbody'); r.rows.forEach(row => { const tr = el('tr'); tr.appendChild(el('td', null, row.i)); tr.appendChild(el('td', null, row.name)); tr.appendChild(el('td', null, row.price)); tbody.appendChild(tr); }); table.appendChild(tbody);
+  patternOut.appendChild(table);
+});
+$('pat-nested').onclick = () => runPattern('/api/pattern/nested_update', 'Update champ imbriqué', r => {
+  patternHeading('Avant'); patternBlock(r.before, true);
+  patternHeading('Après'); patternBlock(r.after, true);
+});
+$('pat-array').onclick = () => runPattern('/api/pattern/array_ops', 'Array operators', r => {
+  r.steps.forEach(s => {
+    const row = el('div', 'pattern-step');
+    row.appendChild(el('div', 'pattern-step-op', s.op));
+    row.appendChild(el('div', 'pattern-step-val', JSON.stringify(s.tags)));
+    patternOut.appendChild(row);
+  });
+});
+$('pat-upsert').onclick = () => runPattern('/api/pattern/upsert', 'Upsert idempotent', r => {
+  patternHeading('1er appel (doc inexistant → crée)'); patternBlock(r.first_call, true);
+  patternHeading('2ème appel (même filtre → met à jour)'); patternBlock(r.second_call, true);
+  patternHeading('Document final'); patternBlock(r.final, true);
+});
+$('pat-distinct').onclick = () => runPattern('/api/pattern/distinct', 'distinct()', r => {
+  patternBlock('Categories uniques (' + r.latency_ms + ' ms) :', true);
+  patternBlock(r.categories);
+});
+$('pat-operators').onclick = () => runPattern('/api/pattern/operators', 'Query operators combinés', r => {
+  patternHeading('Requête'); patternBlock(r.query);
+  patternHeading(r.matched_count + ' docs matchés');
+  const table = el('table', 'pattern-table');
+  const thead = el('thead'); const trh = el('tr'); ['name', 'role', 'city', 'age'].forEach(k => trh.appendChild(el('th', null, k))); thead.appendChild(trh); table.appendChild(thead);
+  const tbody = el('tbody'); r.results.forEach(row => { const tr = el('tr'); tr.appendChild(el('td', null, row.name)); tr.appendChild(el('td', null, row.role)); tr.appendChild(el('td', null, row.city || '—')); tr.appendChild(el('td', null, row.age)); tbody.appendChild(tr); }); table.appendChild(tbody);
+  patternOut.appendChild(table);
+});
+
+// ─── SQL underneath ───
+const explainOut = $('explain-out');
+$('btn-explain').onclick = async () => {
+  while (explainOut.firstChild) explainOut.removeChild(explainOut.firstChild);
+  const loading = el('div', null, 'Chargement…'); loading.style.color = 'hsl(0,0%,50%)'; explainOut.appendChild(loading);
+  try {
+    const r = await api('/api/explain');
+    explainOut.removeChild(loading);
+    const narr = el('div', 'pattern-narrative', r.narrative); explainOut.appendChild(narr);
+    const pre = el('pre', 'pattern-block', JSON.stringify(r.explain, null, 2)); pre.style.maxHeight = '500px'; explainOut.appendChild(pre);
+    addRow('explain', 'plan PG retourné ✓', true);
+  } catch (e) {
+    explainOut.removeChild(loading);
+    const errBlock = el('div', 'pattern-block'); errBlock.style.color = '#fca5a5'; errBlock.textContent = '❌ ' + e.message; explainOut.appendChild(errBlock);
+    addRow('explain', e.message, false);
+  }
+};
+
+// ─── Scorecard ───
+function updateScorecard() {
+  const cats = { crud: { ok: 0, total: 0 }, index: { ok: 0, total: 0 }, agg: { ok: 0, total: 0 }, adv: { ok: 0, total: 0 } };
+  document.querySelectorAll('[data-cat]').forEach(p => {
+    const cat = p.getAttribute('data-cat');
+    if (!cats[cat]) return;
+    cats[cat].total++;
+    if (p.classList.contains('ok')) cats[cat].ok++;
+  });
+  let totalOk = 0, totalAll = 0;
+  Object.entries(cats).forEach(([k, v]) => {
+    totalOk += v.ok; totalAll += v.total;
+    const pct = v.total ? Math.round((v.ok / v.total) * 100) : 0;
+    const bar = $('bar-' + k); const val = $('val-' + k);
+    if (bar) bar.style.width = pct + '%';
+    if (val) val.textContent = v.ok + '/' + v.total;
+  });
+  $('score-big').textContent = totalOk + '/' + totalAll;
+}
+
 $('btn-compat').onclick = async () => {
   const b = $('btn-compat'); b.disabled = true; const oldT = b.textContent; b.textContent = 'Running…';
   document.querySelectorAll('[data-test]').forEach(el2 => { el2.className='compat-state pending'; el2.textContent='pending'; });
+  updateScorecard();
   addRow('compat', 'Lancement de 14 tests de compatibilité Mongo réels…');
   const tests = [
     ['crud',            '/api/compat/crud'],
@@ -806,8 +1115,10 @@ $('btn-compat').onclick = async () => {
     } catch(e) { setCompat(name, false, e.message); addRow('compat', name + ' : ❌ ' + e.message, false); nKo++; }
   }
   addRow('compat', 'Bilan : ' + nOk + ' ✓ · ' + nKo + ' ❌', nKo === 0);
+  updateScorecard();
   b.disabled = false; b.textContent = oldT;
 };
+updateScorecard();
 </script></body></html>`;
 
 const server = http.createServer(async (req, res) => {
