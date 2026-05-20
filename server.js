@@ -910,11 +910,12 @@ async function refresh() {
     $('m-wire-sub').textContent = 'compat ' + s.mongo_compat;
     flashUpdate($('m-version'), s.ferretdb_version);
     flashUpdate($('m-backend'), s.backend);
-    $('m-target').textContent = s.target;
+    const targetMasked = (s.target || '').replace(/app_[a-f0-9-]+/, '<private app>').replace(/ng_[a-f0-9-]+/, '<network-group>');
+    $('m-target').textContent = targetMasked;
     flashUpdate($('m-docs'), s.docs_in_dashboard);
     $('nav-status').textContent = 'Live';
     $('ft-version').textContent = s.ferretdb_version;
-    $('ft-target').textContent = s.target;
+    $('ft-target').textContent = targetMasked;
     if (firstStatus) { addRow('status', 'Connecté à ' + s.target + ' (FerretDB ' + s.ferretdb_version + ')', true); firstStatus = false; }
   } catch (e) {
     $('m-status').textContent = 'KO';
