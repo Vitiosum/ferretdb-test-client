@@ -231,18 +231,385 @@ const routes = {
 
   '/test/cleanup': async () => {
     const db = await getDb();
-    const cols = ['items', 'crud_test', 'agg_test', 'idx_test', 'bulk_test'];
+    const cols = ['items', 'crud_test', 'agg_test', 'idx_test', 'bulk_test', 'bench', 'dashboard', 'bench_quick'];
     const out = {};
     for (const c of cols) {
       try { await db.collection(c).drop(); out[c] = 'dropped'; } catch (e) { out[c] = e.codeName || e.message; }
     }
     return out;
   },
+
+  '/api/status': async () => {
+    const t0 = Date.now();
+    const db = await getDb();
+    const hello = await db.command({ hello: 1 });
+    const buildInfo = await db.command({ buildInfo: 1 });
+    const ping_ms = Date.now() - t0;
+    const col = db.collection('dashboard');
+    const docs_count = await col.countDocuments();
+    return {
+      ok: true,
+      ping_ms,
+      target: `${MONGO_HOST}:${MONGO_PORT}`,
+      wire_version: hello.maxWireVersion,
+      mongo_compat: buildInfo.version,
+      ferretdb_version: buildInfo.ferretdb?.version || 'v1.x',
+      backend: buildInfo.ferretdb ? (buildInfo.ferretdb.package?.includes('eval') ? 'PG embedded (self-hosted)' : 'PG addon (managed)') : 'unknown',
+      docs_in_dashboard: docs_count,
+    };
+  },
+
+  '/api/insert': async () => {
+    const db = await getDb();
+    const col = db.collection('dashboard');
+    const t0 = Date.now();
+    const r = await col.insertOne({
+      ts: new Date(),
+      msg: 'doc inséré via dashboard',
+      tag: ['alpha', 'beta', 'gamma'][Math.floor(Math.random() * 3)],
+      value: Math.floor(Math.random() * 1000),
+    });
+    return { ok: true, _id: String(r.insertedId), latency_ms: Date.now() - t0 };
+  },
+
+  '/api/find': async () => {
+    const db = await getDb();
+    const col = db.collection('dashboard');
+    const t0 = Date.now();
+    const docs = await col.find({}).sort({ ts: -1 }).limit(20).toArray();
+    return { ok: true, latency_ms: Date.now() - t0, count: docs.length };
+  },
+
+  '/api/aggregate': async () => {
+    const db = await getDb();
+    const col = db.collection('dashboard');
+    const t0 = Date.now();
+    const out = await col.aggregate([
+      { $group: { _id: '$tag', count: { $sum: 1 }, sum_value: { $sum: '$value' } } },
+      { $sort: { count: -1 } },
+    ]).toArray();
+    return { ok: true, latency_ms: Date.now() - t0, byTag: out };
+  },
+
+  '/api/quickbench': async () => {
+    const db = await getDb();
+    const col = db.collection('bench_quick');
+    await col.drop().catch(() => {});
+
+    const lat = { insert: [], find: [], update: [] };
+
+    const t0i = Date.now();
+    for (let i = 0; i < 500; i += 100) {
+      const ops = Array.from({ length: 100 }, (_, j) => ({
+        insertOne: { document: { i: i + j, v: Math.random() } },
+      }));
+      const t = Date.now();
+      await col.bulkWrite(ops, { ordered: false });
+      lat.insert.push(Date.now() - t);
+    }
+    const insert_total_ms = Date.now() - t0i;
+
+    await col.createIndex({ i: 1 });
+
+    for (let k = 0; k < 200; k++) {
+      const i = Math.floor(Math.random() * 500);
+      const t = Date.now();
+      await col.findOne({ i });
+      lat.find.push(Date.now() - t);
+    }
+
+    for (let k = 0; k < 100; k++) {
+      const i = Math.floor(Math.random() * 500);
+      const t = Date.now();
+      await col.updateOne({ i }, { $set: { touched: new Date() } });
+      lat.update.push(Date.now() - t);
+    }
+
+    const stat = (arr) => {
+      const s = [...arr].sort((a, b) => a - b);
+      return {
+        p50: s[Math.floor(s.length * 0.5)],
+        p95: s[Math.floor(s.length * 0.95)],
+        p99: s[Math.floor(s.length * 0.99)],
+        avg: +(s.reduce((a, b) => a + b, 0) / s.length).toFixed(2),
+      };
+    };
+
+    return {
+      ok: true,
+      insert: { ...stat(lat.insert), n_docs: 500, total_ms: insert_total_ms, throughput: Math.round(500000 / insert_total_ms) },
+      find: { ...stat(lat.find), n: 200 },
+      update: { ...stat(lat.update), n: 100 },
+    };
+  },
+
+  '/api/drop_dashboard': async () => {
+    const db = await getDb();
+    try { await db.collection('dashboard').drop(); return { ok: true, dropped: 'dashboard' }; } catch (e) { return { ok: false, error: e.message }; }
+  },
 };
 
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="fr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FerretDB Live — Clever Cloud</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Newsreader:ital,wght@1,300;1,400&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{font-family:'Inter',sans-serif;background:hsl(0,0%,9%);color:hsl(0,0%,98%);min-height:100vh;overflow-x:hidden}
+.orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:0.5}
+.orb-1{width:500px;height:500px;background:radial-gradient(circle,#3b82f6 0%,transparent 70%);top:-150px;right:-100px}
+.orb-2{width:350px;height:350px;background:radial-gradient(circle,#8b5cf6 0%,transparent 70%);bottom:-100px;left:-80px}
+.orb-3{width:250px;height:250px;background:radial-gradient(circle,#06b6d4 0%,transparent 70%);top:45%;left:40%}
+.wrap{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:0 24px}
+.nav{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:rgba(23,23,23,0.75);backdrop-filter:blur(16px);border-bottom:1px solid hsl(0,0%,20%);position:sticky;top:0;z-index:10;margin:0 -24px}
+.nav-logo{font-size:14px;font-weight:700;letter-spacing:-0.02em}
+.nav-logo span{color:#3b82f6}
+.nav-pill{display:inline-flex;align-items:center;gap:6px;background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.2);border-radius:99px;padding:5px 12px;font-size:10px;color:#60a5fa;font-weight:600;letter-spacing:0.06em;text-transform:uppercase}
+.nav-dot{width:5px;height:5px;background:#3b82f6;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.hero{padding:60px 0 30px}
+.live-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:99px;color:#60a5fa;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;padding:5px 16px;margin-bottom:18px}
+.live-dot{width:6px;height:6px;background:#3b82f6;border-radius:50%;animation:pulse 1.5s ease-in-out infinite}
+h1{font-size:clamp(2.5rem,7vw,4rem);font-weight:700;letter-spacing:-0.05em;line-height:1.05;margin-bottom:8px}
+.hero-serif{display:block;font-family:'Newsreader',serif;font-style:italic;font-weight:300;font-size:clamp(1.4rem,4vw,2.2rem);color:hsl(0,0%,65%);letter-spacing:-0.02em;margin-bottom:14px}
+.hero-sub{color:hsl(0,0%,55%);font-size:14px;letter-spacing:-0.01em;max-width:600px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin:36px 0}
+.card{background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:12px;padding:18px;position:relative;overflow:hidden;transition:border-color 0.3s}
+.card:hover{border-color:hsl(0,0%,30%)}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:12px 12px 0 0;background:var(--accent)}
+.card-status{--accent:linear-gradient(90deg,#22c55e,#16a34a)}
+.card-version{--accent:linear-gradient(90deg,#3b82f6,#2563eb)}
+.card-backend{--accent:linear-gradient(90deg,#8b5cf6,#7c3aed)}
+.card-ping{--accent:linear-gradient(90deg,#fbbf24,#f59e0b)}
+.card-docs{--accent:linear-gradient(90deg,#06b6d4,#0891b2)}
+.card-wire{--accent:linear-gradient(90deg,#ec4899,#db2777)}
+.card-label{font-size:9px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:hsl(0,0%,55%);margin-bottom:10px}
+.card-value{font-family:'DM Mono',monospace;font-size:1.7rem;font-weight:300;line-height:1;margin-bottom:4px;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;word-break:break-all}
+.card-sub{font-size:10px;color:hsl(0,0%,45%);letter-spacing:0.02em;margin-top:8px}
+.flash{animation:flash 0.6s ease-out}
+@keyframes flash{0%{color:#3b82f6}100%{color:hsl(0,0%,98%)}}
+.section{margin:36px 0}
+.section-title{font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:hsl(0,0%,55%);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.section-title::before{content:'';width:3px;height:14px;background:#3b82f6;border-radius:2px}
+.actions{display:flex;flex-wrap:wrap;gap:10px}
+button{background:hsl(0,0%,14%);border:1px solid hsl(0,0%,22%);color:hsl(0,0%,98%);padding:10px 18px;border-radius:8px;font-family:inherit;font-size:12px;font-weight:500;cursor:pointer;letter-spacing:-0.01em;transition:all 0.2s}
+button:hover{background:hsl(0,0%,18%);border-color:#3b82f6}
+button:disabled{opacity:0.5;cursor:not-allowed}
+button.primary{background:#3b82f6;border-color:#3b82f6;color:white}
+button.primary:hover{background:#2563eb}
+button.danger{border-color:hsl(0,75%,50%,0.4);color:#fca5a5}
+button.danger:hover{background:hsl(0,75%,50%,0.1)}
+.feed{background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:12px;max-height:400px;overflow:auto;font-family:'DM Mono',monospace;font-size:11px}
+.feed-row{padding:10px 16px;border-bottom:1px solid hsl(0,0%,14%);display:flex;gap:14px;align-items:flex-start;animation:slideIn 0.3s ease-out}
+.feed-row:last-child{border-bottom:none}
+@keyframes slideIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:translateX(0)}}
+.feed-time{color:hsl(0,0%,40%);min-width:65px;font-size:10px}
+.feed-tag{color:#3b82f6;font-weight:600;min-width:80px;font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+.feed-tag.ok{color:#22c55e}
+.feed-tag.err{color:#ef4444}
+.feed-msg{color:hsl(0,0%,80%);flex:1;word-break:break-word}
+.feed-empty{padding:30px;text-align:center;color:hsl(0,0%,40%);font-family:inherit;font-size:13px}
+.bench-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:14px}
+.bench-card{background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:10px;padding:14px}
+.bench-card h4{font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:hsl(0,0%,60%);margin-bottom:10px}
+.bench-row{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
+.bench-row .k{color:hsl(0,0%,55%)}
+.bench-row .v{font-family:'DM Mono',monospace;color:hsl(0,0%,95%);font-variant-numeric:tabular-nums}
+.compat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px;margin-top:14px}
+.compat-pill{display:flex;align-items:center;justify-content:space-between;background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:8px;padding:10px 12px;font-size:11px}
+.compat-name{color:hsl(0,0%,80%);font-weight:500}
+.compat-state{font-size:10px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase}
+.compat-state.ok{color:#22c55e}
+.compat-state.err{color:#ef4444}
+.compat-state.pending{color:hsl(0,0%,50%)}
+footer{padding:40px 0 60px;color:hsl(0,0%,40%);font-size:11px;text-align:center}
+footer a{color:#60a5fa;text-decoration:none}
+.muted{color:hsl(0,0%,50%);font-size:11px;margin-left:8px}
+</style></head><body>
+<div class="orbs"><div class="orb orb-1"></div><div class="orb orb-2"></div><div class="orb orb-3"></div></div>
+<div class="wrap">
+<nav class="nav"><div class="nav-logo">Ferret<span>DB</span> on Clever Cloud</div><div class="nav-pill"><span class="nav-dot"></span><span id="nav-status">Connecting…</span></div></nav>
+<section class="hero">
+<div class="live-badge"><span class="live-dot"></span>Live demo</div>
+<h1>FerretDB</h1>
+<div class="hero-serif">MongoDB API on Postgres, on Clever Cloud</div>
+<p class="hero-sub">Cette page parle Mongo wire protocol à FerretDB via le Network Group, qui parle SQL/TLS à un add-on PostgreSQL managé. Polling auto toutes les 2 secondes.</p>
+</section>
+<div class="section-title">État de la connexion</div>
+<div class="grid">
+<div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m-status">—</div><div class="card-sub" id="m-status-sub">…</div></div>
+<div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m-ping">—</div><div class="card-sub">via Network Group</div></div>
+<div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m-wire">—</div><div class="card-sub" id="m-wire-sub">MongoDB compat</div></div>
+<div class="card card-version"><div class="card-label">FerretDB version</div><div class="card-value" id="m-version">—</div><div class="card-sub">binary version</div></div>
+<div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m-backend" style="font-size:1.1rem">—</div><div class="card-sub" id="m-target">…</div></div>
+<div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
+</div>
+<section class="section">
+<div class="section-title">Actions interactives</div>
+<div class="actions">
+<button class="primary" id="btn-insert">+ Insérer un doc</button>
+<button id="btn-find">Find latest 20</button>
+<button id="btn-aggregate">Aggregation $group</button>
+<button id="btn-bench">⚡ Quick bench (800 ops)</button>
+<button class="danger" id="btn-drop">Drop dashboard collection</button>
+</div>
+</section>
+<section class="section">
+<div class="section-title">Activity feed</div>
+<div class="feed" id="feed"><div class="feed-empty">Pas encore d'activité — clique sur une action ci-dessus</div></div>
+</section>
+<section class="section" id="bench-section" style="display:none">
+<div class="section-title">Dernier quick bench</div>
+<div class="bench-grid" id="bench-grid"></div>
+</section>
+<section class="section">
+<div class="section-title">Compatibilité MongoDB testée live</div>
+<div class="compat-grid" id="compat-grid">
+<div class="compat-pill"><span class="compat-name">insert/find</span><span class="compat-state pending" data-test="basic">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $sum</span><span class="compat-state pending" data-test="group_sum">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $avg</span><span class="compat-state pending" data-test="group_avg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$sample</span><span class="compat-state pending" data-test="sample">pending</span></div>
+<div class="compat-pill"><span class="compat-name">createIndex</span><span class="compat-state pending" data-test="index">pending</span></div>
+<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud">pending</span></div>
+</div>
+<div class="actions" style="margin-top:14px"><button id="btn-compat">Lancer les tests compat</button></div>
+</section>
+<footer>Vitio1 · par · FerretDB <span id="ft-version">…</span> · target <span id="ft-target">…</span> · <a href="/server/info">/server/info</a> · <a href="/bench">/bench (full)</a> · <a href="/diag">/diag</a></footer>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const feed = $('feed');
+let firstStatus = true;
+function el(tag, cls, txt) { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; }
+function addRow(tag, msg, ok) {
+  const row = el('div', 'feed-row');
+  const time = new Date().toLocaleTimeString('fr-FR', { hour12: false });
+  row.appendChild(el('div', 'feed-time', time));
+  row.appendChild(el('div', 'feed-tag ' + (ok===false?'err':ok===true?'ok':''), tag));
+  row.appendChild(el('div', 'feed-msg', msg));
+  const empty = feed.querySelector('.feed-empty');
+  if (empty) empty.remove();
+  feed.insertBefore(row, feed.firstChild);
+  while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+function flashUpdate(target, val) { const t = String(val); if (target.textContent === t) return; target.textContent = t; target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash'); }
+async function api(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status)); return j; }
+async function refresh() {
+  try {
+    const s = await api('/api/status');
+    flashUpdate($('m-status'), 'OK');
+    $('m-status-sub').textContent = 'connecté';
+    flashUpdate($('m-ping'), s.ping_ms + ' ms');
+    flashUpdate($('m-wire'), s.wire_version);
+    $('m-wire-sub').textContent = 'compat ' + s.mongo_compat;
+    flashUpdate($('m-version'), s.ferretdb_version);
+    flashUpdate($('m-backend'), s.backend);
+    $('m-target').textContent = s.target;
+    flashUpdate($('m-docs'), s.docs_in_dashboard);
+    $('nav-status').textContent = 'Live';
+    $('ft-version').textContent = s.ferretdb_version;
+    $('ft-target').textContent = s.target;
+    if (firstStatus) { addRow('status', 'Connecté à ' + s.target + ' (FerretDB ' + s.ferretdb_version + ')', true); firstStatus = false; }
+  } catch (e) {
+    $('m-status').textContent = 'KO';
+    $('m-status-sub').textContent = e.message;
+    $('nav-status').textContent = 'Erreur';
+    if (firstStatus) { addRow('status', 'Erreur : ' + e.message, false); firstStatus = false; }
+  }
+}
+setInterval(refresh, 2000);
+refresh();
+$('btn-insert').onclick = async () => {
+  try { const r = await api('/api/insert'); addRow('insert', '_id ' + r._id + ' — ' + r.latency_ms + ' ms', true); }
+  catch(e) { addRow('insert', e.message, false); }
+};
+$('btn-find').onclick = async () => {
+  try { const r = await api('/api/find'); addRow('find', r.count + ' docs en ' + r.latency_ms + ' ms (last 20, sort -ts)', true); }
+  catch(e) { addRow('find', e.message, false); }
+};
+$('btn-aggregate').onclick = async () => {
+  try {
+    const r = await api('/api/aggregate');
+    const summary = r.byTag.map(b => b._id + ':' + b.count + '/' + b.sum_value).join(' · ');
+    addRow('aggregate', '$group by tag — ' + r.latency_ms + ' ms — ' + (summary || '(vide)'), true);
+  } catch(e) { addRow('aggregate', e.message, false); }
+};
+$('btn-bench').onclick = async () => {
+  const b = $('btn-bench');
+  b.disabled = true; b.textContent = '⚡ Running…';
+  addRow('bench', 'Démarrage : 500 inserts + 200 finds + 100 updates…');
+  try {
+    const r = await api('/api/quickbench');
+    $('bench-section').style.display = 'block';
+    const grid = $('bench-grid');
+    grid.replaceChildren();
+    function brow(k, v) { const row = el('div','bench-row'); row.appendChild(el('span','k',k)); row.appendChild(el('span','v',v)); return row; }
+    ['insert','find','update'].forEach(k => {
+      const m = r[k];
+      const card = el('div', 'bench-card');
+      card.appendChild(el('h4', null, k + ' (' + (m.n_docs||m.n) + ' ops)'));
+      card.appendChild(brow('p50', m.p50 + ' ms'));
+      card.appendChild(brow('p95', m.p95 + ' ms'));
+      card.appendChild(brow('p99', m.p99 + ' ms'));
+      card.appendChild(brow('avg', m.avg + ' ms'));
+      if (k === 'insert') card.appendChild(brow('throughput', r.insert.throughput + ' /s'));
+      grid.appendChild(card);
+    });
+    addRow('bench', 'OK — insert p50=' + r.insert.p50 + 'ms · find p50=' + r.find.p50 + 'ms · update p50=' + r.update.p50 + 'ms', true);
+  } catch(e) { addRow('bench', e.message, false); }
+  b.disabled = false; b.textContent = '⚡ Quick bench (800 ops)';
+};
+$('btn-drop').onclick = async () => {
+  if (!confirm('Drop la collection dashboard ?')) return;
+  try { await api('/api/drop_dashboard'); addRow('drop', 'collection dashboard supprimée', true); }
+  catch(e) { addRow('drop', e.message, false); }
+};
+function setCompat(name, ok, detail) {
+  const el2 = document.querySelector('[data-test="' + name + '"]');
+  if (!el2) return;
+  el2.className = 'compat-state ' + (ok ? 'ok' : 'err');
+  el2.textContent = ok ? '✓ OK' : '✗ KO';
+  if (detail) el2.title = detail;
+}
+$('btn-compat').onclick = async () => {
+  document.querySelectorAll('[data-test]').forEach(el2 => { el2.className='compat-state pending'; el2.textContent='pending'; });
+  addRow('compat', 'Lancement des tests de compatibilité…');
+  try { await api('/api/insert'); await api('/api/find'); setCompat('basic', true); addRow('compat', 'insert/find ✓', true); }
+  catch(e) { setCompat('basic', false, e.message); addRow('compat', 'insert/find ❌ ' + e.message, false); }
+  const tests = [
+    ['group_sum', '/api/aggregate'],
+    ['group_avg', '/test/aggregate'],
+    ['sample', '/api/quickbench'],
+    ['index', '/test/index'],
+    ['crud', '/test/crud'],
+  ];
+  for (const [name, ep] of tests) {
+    try {
+      const r = await fetch(ep);
+      const j = await r.json();
+      const isErr = j.error || j.codeName === 'NotImplemented';
+      setCompat(name, !isErr, isErr ? (j.error || j.codeName) : 'OK');
+      addRow('compat', name + ' : ' + (isErr ? '❌ ' + (j.codeName || j.error) : '✓ ok'), !isErr);
+    } catch(e) { setCompat(name, false, e.message); addRow('compat', name + ' : ' + e.message, false); }
+  }
+};
+</script></body></html>`;
+
 const server = http.createServer(async (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
   const url = req.url.split('?')[0];
+
+  // HTML dashboard on root
+  if (url === '/' || url === '/dashboard') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(DASHBOARD_HTML);
+    return;
+  }
+
+  res.setHeader('Content-Type', 'application/json');
 
   if (routes[url]) {
     try {
@@ -255,10 +622,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  res.end(JSON.stringify({
-    endpoints: Object.keys(routes),
-    target: `${MONGO_HOST}:${MONGO_PORT}`,
-  }, null, 2));
+  res.statusCode = 404;
+  res.end(JSON.stringify({ error: 'not_found', endpoints: Object.keys(routes), dashboard: '/' }, null, 2));
 });
 
 server.listen(PORT, '0.0.0.0', () => {
