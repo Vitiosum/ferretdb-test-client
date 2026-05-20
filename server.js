@@ -507,13 +507,22 @@ const routes = {
     const db = await getDb();
     const col = db.collection('compat_cs');
     await col.drop().catch(() => {});
-    // tente d'ouvrir un change stream — sur FerretDB v1 c'est NotImplemented
-    return new Promise((resolve, reject) => {
-      let cs;
-      try { cs = col.watch(); } catch (e) { return reject(e); }
-      const timer = setTimeout(() => { cs.close(); resolve({ ok: true, note: 'opened without error' }); }, 1500);
-      cs.on('error', e => { clearTimeout(timer); cs.close(); reject(e); });
+    await col.insertOne({ init: true }); // collection exists
+    let cs;
+    try { cs = col.watch(); } catch (e) { throw e; }
+    const got = new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ received: false, reason: 'timeout' }), 3000);
+      cs.on('change', ev => { clearTimeout(timer); resolve({ received: true, op: ev.operationType }); });
+      cs.on('error', e => { clearTimeout(timer); resolve({ received: false, reason: e.codeName || e.message }); });
     });
+    // insert un doc après avoir ouvert le stream → l'event doit arriver
+    await new Promise(r => setTimeout(r, 200));
+    await col.insertOne({ probe: 'change-event' });
+    const result = await got;
+    try { await cs.close(); } catch {}
+    try { await col.drop(); } catch {}
+    if (!result.received) return { ok: false, error: 'change stream silencieux (' + result.reason + ')', codeName: 'NotImplemented' };
+    return { ok: true, ...result };
   },
 };
 
