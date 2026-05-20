@@ -347,6 +347,174 @@ const routes = {
     const db = await getDb();
     try { await db.collection('dashboard').drop(); return { ok: true, dropped: 'dashboard' }; } catch (e) { return { ok: false, error: e.message }; }
   },
+
+  // ─── Tests de compatibilité honnêtes : chaque endpoint exécute RÉELLEMENT l'opérateur annoncé ───
+  '/api/compat/crud': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_crud');
+    await col.drop().catch(() => {});
+    const ins = await col.insertMany([{ n: 1 }, { n: 2 }, { n: 3 }]);
+    const found = await col.findOne({ n: 2 });
+    const upd = await col.updateOne({ n: 2 }, { $set: { touched: true } });
+    const del = await col.deleteOne({ n: 1 });
+    await col.drop().catch(() => {});
+    return { ok: true, inserted: ins.insertedCount, found: !!found, modified: upd.modifiedCount, deleted: del.deletedCount };
+  },
+
+  '/api/compat/index_simple': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_idx_simple');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ v: 1 }, { v: 2 }, { v: 3 }]);
+    await col.createIndex({ v: 1 });
+    const idxs = await col.indexes();
+    await col.drop().catch(() => {});
+    return { ok: true, indexes: idxs.length };
+  },
+
+  '/api/compat/index_unique': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_idx_unique');
+    await col.drop().catch(() => {});
+    await col.createIndex({ email: 1 }, { unique: true });
+    await col.insertOne({ email: 'a@x.com' });
+    let collided = false;
+    try { await col.insertOne({ email: 'a@x.com' }); } catch (e) { collided = e.code === 11000; }
+    await col.drop().catch(() => {});
+    return { ok: collided, collided };
+  },
+
+  '/api/compat/index_compound': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_idx_compound');
+    await col.drop().catch(() => {});
+    await col.createIndex({ kind: 1, ts: -1 });
+    await col.insertMany(Array.from({ length: 50 }, (_, i) => ({ kind: i % 3, ts: i })));
+    const idxs = await col.indexes();
+    await col.drop().catch(() => {});
+    return { ok: true, count: idxs.length };
+  },
+
+  '/api/compat/group_sum': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_agg');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
+    const r = await col.aggregate([{ $group: { _id: '$k', total: { $sum: '$v' } } }, { $sort: { total: -1 } }]).toArray();
+    await col.drop().catch(() => {});
+    return { ok: true, result: r };
+  },
+
+  '/api/compat/group_avg': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_agg');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
+    const r = await col.aggregate([{ $group: { _id: '$k', avg: { $avg: '$v' } } }]).toArray();
+    await col.drop().catch(() => {});
+    return { ok: true, result: r };
+  },
+
+  '/api/compat/group_max_min': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_agg');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
+    const r = await col.aggregate([{ $group: { _id: '$k', mx: { $max: '$v' }, mn: { $min: '$v' } } }]).toArray();
+    await col.drop().catch(() => {});
+    return { ok: true, result: r };
+  },
+
+  '/api/compat/sample': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_sample');
+    await col.drop().catch(() => {});
+    await col.insertMany(Array.from({ length: 50 }, (_, i) => ({ i })));
+    const r = await col.aggregate([{ $sample: { size: 5 } }]).toArray();
+    await col.drop().catch(() => {});
+    return { ok: true, picked: r.length };
+  },
+
+  '/api/compat/lookup': async () => {
+    const db = await getDb();
+    const users = db.collection('compat_users');
+    const orders = db.collection('compat_orders');
+    await users.drop().catch(() => {});
+    await orders.drop().catch(() => {});
+    await users.insertMany([{ _id: 1, name: 'Alice' }, { _id: 2, name: 'Bob' }]);
+    await orders.insertMany([{ uid: 1, item: 'book' }, { uid: 1, item: 'pen' }, { uid: 2, item: 'cup' }]);
+    const r = await users.aggregate([
+      { $lookup: { from: 'compat_orders', localField: '_id', foreignField: 'uid', as: 'orders' } },
+    ]).toArray();
+    await users.drop().catch(() => {});
+    await orders.drop().catch(() => {});
+    return { ok: true, joined: r };
+  },
+
+  '/api/compat/regex': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_regex');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ name: 'Apple' }, { name: 'apricot' }, { name: 'banana' }]);
+    const r = await col.find({ name: { $regex: '^a', $options: 'i' } }).toArray();
+    await col.drop().catch(() => {});
+    return { ok: r.length === 2, matched: r.length };
+  },
+
+  '/api/compat/bulk_write': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_bulk');
+    await col.drop().catch(() => {});
+    const r = await col.bulkWrite([
+      { insertOne: { document: { a: 1 } } },
+      { insertOne: { document: { a: 2 } } },
+      { updateOne: { filter: { a: 1 }, update: { $set: { b: 'x' } } } },
+      { deleteOne: { filter: { a: 2 } } },
+    ]);
+    await col.drop().catch(() => {});
+    return { ok: true, inserted: r.insertedCount, modified: r.modifiedCount, deleted: r.deletedCount };
+  },
+
+  '/api/compat/text_search': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_text');
+    await col.drop().catch(() => {});
+    await col.insertMany([{ d: 'the quick brown fox' }, { d: 'jumps over' }, { d: 'lazy dog' }]);
+    await col.createIndex({ d: 'text' });
+    const r = await col.find({ $text: { $search: 'fox dog' } }).toArray();
+    await col.drop().catch(() => {});
+    return { ok: true, matched: r.length };
+  },
+
+  '/api/compat/transaction': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_tx');
+    await col.drop().catch(() => {});
+    const sess = client.startSession();
+    try {
+      await sess.withTransaction(async () => {
+        await col.insertOne({ a: 1 }, { session: sess });
+        await col.insertOne({ a: 2 }, { session: sess });
+      });
+      return { ok: true };
+    } finally {
+      try { await col.drop(); } catch {}
+      sess.endSession();
+    }
+  },
+
+  '/api/compat/change_stream': async () => {
+    const db = await getDb();
+    const col = db.collection('compat_cs');
+    await col.drop().catch(() => {});
+    // tente d'ouvrir un change stream — sur FerretDB v1 c'est NotImplemented
+    return new Promise((resolve, reject) => {
+      let cs;
+      try { cs = col.watch(); } catch (e) { return reject(e); }
+      const timer = setTimeout(() => { cs.close(); resolve({ ok: true, note: 'opened without error' }); }, 1500);
+      cs.on('error', e => { clearTimeout(timer); cs.close(); reject(e); });
+    });
+  },
 };
 
 const DASHBOARD_HTML = `<!doctype html>
@@ -469,12 +637,20 @@ footer a{color:#60a5fa;text-decoration:none}
 <section class="section">
 <div class="section-title">Compatibilité MongoDB testée live</div>
 <div class="compat-grid" id="compat-grid">
-<div class="compat-pill"><span class="compat-name">insert/find</span><span class="compat-state pending" data-test="basic">pending</span></div>
+<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index simple</span><span class="compat-state pending" data-test="index_simple">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index unique</span><span class="compat-state pending" data-test="index_unique">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Index composé</span><span class="compat-state pending" data-test="index_compound">pending</span></div>
 <div class="compat-pill"><span class="compat-name">$group + $sum</span><span class="compat-state pending" data-test="group_sum">pending</span></div>
 <div class="compat-pill"><span class="compat-name">$group + $avg</span><span class="compat-state pending" data-test="group_avg">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$group + $max/$min</span><span class="compat-state pending" data-test="group_max_min">pending</span></div>
 <div class="compat-pill"><span class="compat-name">$sample</span><span class="compat-state pending" data-test="sample">pending</span></div>
-<div class="compat-pill"><span class="compat-name">createIndex</span><span class="compat-state pending" data-test="index">pending</span></div>
-<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$lookup (JOIN)</span><span class="compat-state pending" data-test="lookup">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$regex</span><span class="compat-state pending" data-test="regex">pending</span></div>
+<div class="compat-pill"><span class="compat-name">bulkWrite</span><span class="compat-state pending" data-test="bulk_write">pending</span></div>
+<div class="compat-pill"><span class="compat-name">$text search</span><span class="compat-state pending" data-test="text_search">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Transactions multi-doc</span><span class="compat-state pending" data-test="transaction">pending</span></div>
+<div class="compat-pill"><span class="compat-name">Change streams</span><span class="compat-state pending" data-test="change_stream">pending</span></div>
 </div>
 <div class="actions" style="margin-top:14px"><button id="btn-compat">Lancer les tests compat</button></div>
 </section>
@@ -576,26 +752,38 @@ function setCompat(name, ok, detail) {
   if (detail) el2.title = detail;
 }
 $('btn-compat').onclick = async () => {
+  const b = $('btn-compat'); b.disabled = true; const oldT = b.textContent; b.textContent = 'Running…';
   document.querySelectorAll('[data-test]').forEach(el2 => { el2.className='compat-state pending'; el2.textContent='pending'; });
-  addRow('compat', 'Lancement des tests de compatibilité…');
-  try { await api('/api/insert'); await api('/api/find'); setCompat('basic', true); addRow('compat', 'insert/find ✓', true); }
-  catch(e) { setCompat('basic', false, e.message); addRow('compat', 'insert/find ❌ ' + e.message, false); }
+  addRow('compat', 'Lancement de 14 tests de compatibilité Mongo réels…');
   const tests = [
-    ['group_sum', '/api/aggregate'],
-    ['group_avg', '/test/aggregate'],
-    ['sample', '/api/quickbench'],
-    ['index', '/test/index'],
-    ['crud', '/test/crud'],
+    ['crud',            '/api/compat/crud'],
+    ['index_simple',    '/api/compat/index_simple'],
+    ['index_unique',    '/api/compat/index_unique'],
+    ['index_compound',  '/api/compat/index_compound'],
+    ['group_sum',       '/api/compat/group_sum'],
+    ['group_avg',       '/api/compat/group_avg'],
+    ['group_max_min',   '/api/compat/group_max_min'],
+    ['sample',          '/api/compat/sample'],
+    ['lookup',          '/api/compat/lookup'],
+    ['regex',           '/api/compat/regex'],
+    ['bulk_write',      '/api/compat/bulk_write'],
+    ['text_search',     '/api/compat/text_search'],
+    ['transaction',     '/api/compat/transaction'],
+    ['change_stream',   '/api/compat/change_stream'],
   ];
+  let nOk = 0, nKo = 0;
   for (const [name, ep] of tests) {
     try {
       const r = await fetch(ep);
       const j = await r.json();
-      const isErr = j.error || j.codeName === 'NotImplemented';
-      setCompat(name, !isErr, isErr ? (j.error || j.codeName) : 'OK');
-      addRow('compat', name + ' : ' + (isErr ? '❌ ' + (j.codeName || j.error) : '✓ ok'), !isErr);
-    } catch(e) { setCompat(name, false, e.message); addRow('compat', name + ' : ' + e.message, false); }
+      const isErr = j.error || j.codeName === 'NotImplemented' || j.ok === false;
+      setCompat(name, !isErr, isErr ? (j.codeName || j.error || 'KO') : 'OK');
+      addRow('compat', name + ' : ' + (isErr ? '❌ ' + (j.codeName || j.error || 'KO') : '✓ ok'), !isErr);
+      if (isErr) nKo++; else nOk++;
+    } catch(e) { setCompat(name, false, e.message); addRow('compat', name + ' : ❌ ' + e.message, false); nKo++; }
   }
+  addRow('compat', 'Bilan : ' + nOk + ' ✓ · ' + nKo + ' ❌', nKo === 0);
+  b.disabled = false; b.textContent = oldT;
 };
 </script></body></html>`;
 
