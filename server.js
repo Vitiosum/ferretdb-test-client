@@ -653,7 +653,36 @@ const routes = {
     await col.drop().catch(() => {});
     return {
       ok: true,
-      narrative: "find({kind:'a', v:{$gte:0.5}}).explain('executionStats') — FerretDB retourne le plan PostgreSQL sous-jacent",
+      narrative: "200 docs · find({kind:'a', v:{$gte:0.5}}).explain() — PostgreSQL choisit un Seq Scan car la table est trop petite pour justifier l'index",
+      doc_count: 200,
+      explain,
+    };
+  },
+
+  '/api/explain/large': async () => {
+    const db = await getDb();
+    const col = db.collection('explain_target_large');
+    await col.drop().catch(() => {});
+    const N = 10000;
+    const t0 = Date.now();
+    for (let i = 0; i < N; i += 1000) {
+      const ops = Array.from({ length: 1000 }, (_, j) => ({
+        insertOne: { document: { i: i + j, kind: ['a', 'b', 'c', 'd', 'e'][(i + j) % 5], v: Math.random() } },
+      }));
+      await col.bulkWrite(ops, { ordered: false });
+    }
+    await col.createIndex({ kind: 1, v: 1 });
+    const insertMs = Date.now() - t0;
+    const t1 = Date.now();
+    const explain = await col.find({ kind: 'a', v: { $gte: 0.5 } }).explain('executionStats');
+    const explainMs = Date.now() - t1;
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: `${N} docs · find({kind:'a', v:{$gte:0.5}}).explain() — table assez grande pour que PG utilise (ou pas) un Index Scan`,
+      doc_count: N,
+      seed_ms: insertMs,
+      explain_ms: explainMs,
       explain,
     };
   },
@@ -840,7 +869,10 @@ footer a{color:#60a5fa;text-decoration:none}
 <section class="section">
 <div class="section-title">Plan SQL sous le capot</div>
 <p class="muted" style="margin:0 0 12px 0">FerretDB traduit chaque requête Mongo en SQL côté PostgreSQL. <code>explain()</code> retourne le plan PG, preuve directe.</p>
-<div class="actions"><button id="btn-explain">Afficher le plan PostgreSQL</button></div>
+<div class="actions">
+<button id="btn-explain-small">Plan PG · petite table (200 docs)</button>
+<button id="btn-explain-large">Plan PG · grosse table (10 000 docs)</button>
+</div>
 <div class="pattern-out" id="explain-out" style="margin-top:14px"></div>
 </section>
 
@@ -1047,21 +1079,34 @@ $('pat-operators').onclick = () => runPattern('/api/pattern/operators', 'Query o
 
 // ─── SQL underneath ───
 const explainOut = $('explain-out');
-$('btn-explain').onclick = async () => {
+async function runExplain(ep, label, btn) {
   while (explainOut.firstChild) explainOut.removeChild(explainOut.firstChild);
+  btn.disabled = true; const oldT = btn.textContent; btn.textContent = '⏳ ' + (ep.includes('large') ? 'seed 10k docs…' : 'running…');
   const loading = el('div', null, 'Chargement…'); loading.style.color = 'hsl(0,0%,50%)'; explainOut.appendChild(loading);
   try {
-    const r = await api('/api/explain');
+    const r = await api(ep);
     explainOut.removeChild(loading);
     const narr = el('div', 'pattern-narrative', r.narrative); explainOut.appendChild(narr);
+    // Highlight key metrics
+    const nodeType = r.explain?.queryPlanner?.Plan?.['Node Type'] || '?';
+    const summary = el('div', 'pattern-block tight');
+    summary.textContent = '→ Node Type: ' + nodeType
+      + ' · Plan Rows: ' + (r.explain?.queryPlanner?.Plan?.['Plan Rows'] || '?')
+      + ' · Total Cost: ' + (r.explain?.queryPlanner?.Plan?.['Total Cost'] || '?')
+      + (r.seed_ms ? '\nSeed: ' + r.seed_ms + ' ms · Explain: ' + r.explain_ms + ' ms' : '');
+    summary.style.color = nodeType.toLowerCase().includes('index') ? '#86efac' : '#fbbf24';
+    explainOut.appendChild(summary);
     const pre = el('pre', 'pattern-block', JSON.stringify(r.explain, null, 2)); pre.style.maxHeight = '500px'; explainOut.appendChild(pre);
-    addRow('explain', 'plan PG retourné ✓', true);
+    addRow('explain', label + ' → ' + nodeType + ' ✓', true);
   } catch (e) {
     explainOut.removeChild(loading);
     const errBlock = el('div', 'pattern-block'); errBlock.style.color = '#fca5a5'; errBlock.textContent = '❌ ' + e.message; explainOut.appendChild(errBlock);
-    addRow('explain', e.message, false);
+    addRow('explain', label + ' ❌ ' + e.message, false);
   }
-};
+  btn.disabled = false; btn.textContent = oldT;
+}
+$('btn-explain-small').onclick = (ev) => runExplain('/api/explain', 'small (200)', ev.currentTarget);
+$('btn-explain-large').onclick = (ev) => runExplain('/api/explain/large', 'large (10k)', ev.currentTarget);
 
 // ─── Scorecard ───
 function updateScorecard() {
