@@ -357,6 +357,60 @@ const routes = {
     };
   },
 
+  '/api/latency': async () => {
+    const db = await getDb();
+    const col = db.collection('dashboard');
+    const doc = await col.findOne({}); // need at least 1 doc; if none, create
+    let id = doc?._id;
+    if (!id) {
+      const ins = await col.insertOne({ probe: true, ts: new Date() });
+      id = ins.insertedId;
+    }
+
+    const stat = (arr) => {
+      const s = [...arr].sort((a, b) => a - b);
+      return { min: s[0], p50: s[Math.floor(s.length * 0.5)], p95: s[Math.min(s.length - 1, Math.floor(s.length * 0.95))], max: s[s.length - 1], avg: +(s.reduce((a, b) => a + b, 0) / s.length).toFixed(2) };
+    };
+
+    // Mongo ping (test-client ↔ FerretDB) — pas de PG impliqué côté FerretDB
+    const pingLat = [];
+    for (let k = 0; k < 15; k++) {
+      const t = Date.now();
+      await db.command({ ping: 1 });
+      pingLat.push(Date.now() - t);
+    }
+
+    // findOne par _id — full pipeline test-client → FerretDB → PG → reply
+    const findLat = [];
+    for (let k = 0; k < 15; k++) {
+      const t = Date.now();
+      await col.findOne({ _id: id });
+      findLat.push(Date.now() - t);
+    }
+
+    // hello — léger côté FerretDB (pas de PG)
+    const helloLat = [];
+    for (let k = 0; k < 15; k++) {
+      const t = Date.now();
+      await db.command({ hello: 1 });
+      helloLat.push(Date.now() - t);
+    }
+
+    const p = stat(pingLat);
+    const f = stat(findLat);
+    const h = stat(helloLat);
+    return {
+      ok: true,
+      narrative: 'Décomposition du RTT en mesures réelles : ping/hello côté FerretDB-only vs findOne qui touche PG',
+      hops: {
+        mongo_ping: { ...p, hop: 'test-client → FerretDB (Mongo wire, no PG)' },
+        mongo_hello: { ...h, hop: 'test-client → FerretDB (hello, no PG)' },
+        full_findOne: { ...f, hop: 'test-client → FerretDB → PG addon (full pipeline)' },
+        pg_hop_estimate: { avg: +(f.avg - p.avg).toFixed(2), hop: 'FerretDB → PG addon (estimated = findOne - ping)' },
+      },
+    };
+  },
+
   '/api/drop_dashboard': async () => {
     const db = await getDb();
     try { await db.collection('dashboard').drop(); return { ok: true, dropped: 'dashboard' }; } catch (e) { return { ok: false, error: e.message }; }
@@ -894,6 +948,13 @@ footer a{color:#60a5fa;text-decoration:none}
 </section>
 
 <section class="section">
+<div class="section-title">Latency budget — où va le temps</div>
+<p class="muted" style="margin:0 0 12px 0">3 mesures réelles (15 itérations chacune) pour décomposer le RTT entre les couches</p>
+<div class="actions"><button id="btn-latency">Mesurer les hops</button></div>
+<div class="pattern-out" id="latency-out" style="margin-top:14px"></div>
+</section>
+
+<section class="section">
 <div class="section-title">Plan SQL sous le capot</div>
 <p class="muted" style="margin:0 0 12px 0">FerretDB traduit chaque requête Mongo en SQL côté PostgreSQL. <code>explain()</code> retourne le plan PG, preuve directe.</p>
 <div class="actions">
@@ -1104,6 +1165,51 @@ $('pat-operators').onclick = () => runPattern('/api/pattern/operators', 'Query o
   const tbody = el('tbody'); r.results.forEach(row => { const tr = el('tr'); tr.appendChild(el('td', null, row.name)); tr.appendChild(el('td', null, row.role)); tr.appendChild(el('td', null, row.city || '—')); tr.appendChild(el('td', null, row.age)); tbody.appendChild(tr); }); table.appendChild(tbody);
   patternOut.appendChild(table);
 });
+
+// ─── Latency budget ───
+$('btn-latency').onclick = async (ev) => {
+  const out = $('latency-out');
+  while (out.firstChild) out.removeChild(out.firstChild);
+  const btn = ev.currentTarget; btn.disabled = true; const oldT = btn.textContent; btn.textContent = '⏳ 45 RTT en cours…';
+  out.appendChild(el('div', null, 'Mesure de 15 ping + 15 hello + 15 findOne…')).style.color = 'hsl(0,0%,50%)';
+  try {
+    const r = await api('/api/latency');
+    while (out.firstChild) out.removeChild(out.firstChild);
+    out.appendChild(el('div', 'pattern-narrative', r.narrative));
+
+    const table = el('table', 'pattern-table');
+    const thead = el('thead'); const trh = el('tr');
+    ['Hop', 'min', 'p50', 'p95', 'max', 'avg'].forEach(k => trh.appendChild(el('th', null, k)));
+    thead.appendChild(trh); table.appendChild(thead);
+    const tbody = el('tbody');
+    const rows = [
+      { name: '🟢 test-client → FerretDB (ping)', d: r.hops.mongo_ping },
+      { name: '🟢 test-client → FerretDB (hello)', d: r.hops.mongo_hello },
+      { name: '🔵 test-client → FerretDB → PG (findOne by _id)', d: r.hops.full_findOne },
+    ];
+    rows.forEach(row => {
+      const tr = el('tr');
+      tr.appendChild(el('td', null, row.name));
+      ['min', 'p50', 'p95', 'max', 'avg'].forEach(k => tr.appendChild(el('td', null, row.d[k] + ' ms')));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    out.appendChild(table);
+
+    const summary = el('div', 'pattern-block tight');
+    const pgHop = r.hops.pg_hop_estimate.avg;
+    summary.textContent = '→ Hop FerretDB → PG addon estimé : ' + pgHop + ' ms (avg findOne - avg ping)';
+    summary.style.color = '#86efac';
+    out.appendChild(summary);
+
+    addRow('latency', 'ping p50=' + r.hops.mongo_ping.p50 + 'ms · findOne p50=' + r.hops.full_findOne.p50 + 'ms · PG hop≈' + pgHop + 'ms', true);
+  } catch (e) {
+    while (out.firstChild) out.removeChild(out.firstChild);
+    const errB = el('div', 'pattern-block'); errB.style.color = '#fca5a5'; errB.textContent = '❌ ' + e.message; out.appendChild(errB);
+    addRow('latency', e.message, false);
+  }
+  btn.disabled = false; btn.textContent = oldT;
+};
 
 // ─── SQL underneath ───
 const explainOut = $('explain-out');
