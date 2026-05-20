@@ -247,14 +247,28 @@ const routes = {
     const ping_ms = Date.now() - t0;
     const col = db.collection('dashboard');
     const docs_count = await col.countDocuments();
+
+    // Détection v1 / v2 via la présence de buildInfo.ferretdb (exposé seulement par v2)
+    const isV2 = !!buildInfo.ferretdb;
+    let ferretdb_version, backend;
+    if (isV2) {
+      ferretdb_version = buildInfo.ferretdb.version;
+      backend = buildInfo.ferretdb.package?.includes('eval')
+        ? 'PG embarqué (image eval, self-hosted)'
+        : 'PG self-hosted (split)';
+    } else {
+      ferretdb_version = 'v1.24.x';
+      backend = 'PG add-on managé Clever Cloud';
+    }
+
     return {
       ok: true,
       ping_ms,
       target: `${MONGO_HOST}:${MONGO_PORT}`,
       wire_version: hello.maxWireVersion,
-      mongo_compat: buildInfo.version,
-      ferretdb_version: buildInfo.ferretdb?.version || 'v1.x',
-      backend: buildInfo.ferretdb ? (buildInfo.ferretdb.package?.includes('eval') ? 'PG embedded (self-hosted)' : 'PG addon (managed)') : 'unknown',
+      mongo_compat: 'MongoDB ' + buildInfo.version,
+      ferretdb_version,
+      backend,
       docs_in_dashboard: docs_count,
     };
   },
