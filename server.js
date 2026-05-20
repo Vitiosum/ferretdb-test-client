@@ -659,6 +659,33 @@ const routes = {
     };
   },
 
+  '/api/explain/by_id': async () => {
+    const db = await getDb();
+    const col = db.collection('explain_target_by_id');
+    await col.drop().catch(() => {});
+    const N = 10000;
+    const t0 = Date.now();
+    for (let i = 0; i < N; i += 1000) {
+      const ops = Array.from({ length: 1000 }, (_, j) => ({ insertOne: { document: { i: i + j, v: Math.random() } } }));
+      await col.bulkWrite(ops, { ordered: false });
+    }
+    const insertMs = Date.now() - t0;
+    // Pick a random _id at the middle of the table
+    const sample = await col.findOne({ i: N / 2 });
+    const t1 = Date.now();
+    const explain = await col.find({ _id: sample._id }).explain('executionStats');
+    const explainMs = Date.now() - t1;
+    await col.drop().catch(() => {});
+    return {
+      ok: true,
+      narrative: `${N} docs · findOne({_id: ObjectId(...)}).explain() — l'index B-tree natif PG sur _id est utilisé → Index Scan`,
+      doc_count: N,
+      seed_ms: insertMs,
+      explain_ms: explainMs,
+      explain,
+    };
+  },
+
   '/api/explain/large': async () => {
     const db = await getDb();
     const col = db.collection('explain_target_large');
@@ -871,7 +898,8 @@ footer a{color:#60a5fa;text-decoration:none}
 <p class="muted" style="margin:0 0 12px 0">FerretDB traduit chaque requête Mongo en SQL côté PostgreSQL. <code>explain()</code> retourne le plan PG, preuve directe.</p>
 <div class="actions">
 <button id="btn-explain-small">Plan PG · petite table (200 docs)</button>
-<button id="btn-explain-large">Plan PG · grosse table (10 000 docs)</button>
+<button id="btn-explain-large">Plan PG · 10k docs, filtre sur champ</button>
+<button id="btn-explain-byid">Plan PG · 10k docs, lookup par _id (Index Scan ✓)</button>
 </div>
 <div class="pattern-out" id="explain-out" style="margin-top:14px"></div>
 </section>
@@ -1106,7 +1134,8 @@ async function runExplain(ep, label, btn) {
   btn.disabled = false; btn.textContent = oldT;
 }
 $('btn-explain-small').onclick = (ev) => runExplain('/api/explain', 'small (200)', ev.currentTarget);
-$('btn-explain-large').onclick = (ev) => runExplain('/api/explain/large', 'large (10k)', ev.currentTarget);
+$('btn-explain-large').onclick = (ev) => runExplain('/api/explain/large', 'large (10k, filter on field)', ev.currentTarget);
+$('btn-explain-byid').onclick = (ev) => runExplain('/api/explain/by_id', 'by _id (10k)', ev.currentTarget);
 
 // ─── Scorecard ───
 function updateScorecard() {
