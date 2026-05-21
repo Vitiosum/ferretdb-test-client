@@ -265,37 +265,47 @@ const routes = {
   },
 
   '/api/status': async () => {
-    const t0 = Date.now();
-    const db = await getDb();
-    const hello = await db.command({ hello: 1 });
-    const buildInfo = await db.command({ buildInfo: 1 });
-    const ping_ms = Date.now() - t0;
-    const col = db.collection('dashboard');
-    const docs_count = await col.countDocuments();
-
-    // Détection v1 / v2 via la présence de buildInfo.ferretdb (exposé seulement par v2)
-    const isV2 = !!buildInfo.ferretdb;
-    let ferretdb_version, backend;
-    if (isV2) {
-      ferretdb_version = buildInfo.ferretdb.version;
-      backend = buildInfo.ferretdb.package?.includes('eval')
-        ? 'PG embarqué (image eval, self-hosted)'
-        : 'PG self-hosted (split)';
-    } else {
-      ferretdb_version = 'v1.24.x';
-      backend = 'PG add-on managé Clever Cloud';
+    async function probe(engine) {
+      try {
+        const t0 = Date.now();
+        const db = await getDb(engine);
+        const hello = await db.command({ hello: 1 });
+        const buildInfo = await db.command({ buildInfo: 1 });
+        const ping_ms = Date.now() - t0;
+        const docs_count = await db.collection('dashboard').countDocuments();
+        const isV2 = !!buildInfo.ferretdb;
+        let ferretdb_version, backend;
+        if (isV2) {
+          ferretdb_version = buildInfo.ferretdb.version;
+          backend = buildInfo.ferretdb.package?.includes('eval')
+            ? 'PG embarqué (eval image, self-hosted)'
+            : 'PG self-hosted (split)';
+        } else {
+          ferretdb_version = 'v1.24.x';
+          backend = 'PG add-on managé Clever Cloud';
+        }
+        const uri = engine === 'v2' ? MONGO_URI_V2 : MONGO_URI;
+        const parsed = new URL(uri.replace('mongodb://', 'http://'));
+        return {
+          ok: true,
+          ping_ms,
+          target: `${parsed.hostname}:${parsed.port || 27017}`,
+          wire_version: hello.maxWireVersion,
+          mongo_compat: 'MongoDB ' + buildInfo.version,
+          ferretdb_version,
+          backend,
+          docs_in_dashboard: docs_count,
+        };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
     }
 
-    return {
-      ok: true,
-      ping_ms,
-      target: `${MONGO_HOST}:${MONGO_PORT}`,
-      wire_version: hello.maxWireVersion,
-      mongo_compat: 'MongoDB ' + buildInfo.version,
-      ferretdb_version,
-      backend,
-      docs_in_dashboard: docs_count,
-    };
+    const v1 = await probe('v1');
+    const v2 = MONGO_URI_V2 ? await probe('v2') : null;
+
+    // Backward-compat: replicate v1 at top level
+    return { ...v1, v2 };
   },
 
   '/api/insert': async () => {
@@ -956,7 +966,7 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="hero-serif">MongoDB API on Postgres, on Clever Cloud</div>
 <p class="hero-sub">Cette page parle Mongo wire protocol à FerretDB via le Network Group, qui parle SQL/TLS à un add-on PostgreSQL managé. Polling auto toutes les 2 secondes.</p>
 </section>
-<div class="section-title">État de la connexion</div>
+<div class="section-title">État de la connexion — FerretDB v1 (proxy → PG add-on managé)</div>
 <div class="grid">
 <div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m-status">—</div><div class="card-sub" id="m-status-sub">…</div></div>
 <div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m-ping">—</div><div class="card-sub">via Network Group</div></div>
@@ -964,6 +974,15 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="card card-version"><div class="card-label">FerretDB version</div><div class="card-value" id="m-version">—</div><div class="card-sub">binary version</div></div>
 <div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m-backend" style="font-size:1.1rem">—</div><div class="card-sub" id="m-target">…</div></div>
 <div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
+</div>
+<div class="section-title" style="margin-top:24px">État de la connexion — FerretDB v2 (eval image, PG embarqué self-hosted)</div>
+<div class="grid">
+<div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m2-status">—</div><div class="card-sub" id="m2-status-sub">…</div></div>
+<div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m2-ping">—</div><div class="card-sub">via Network Group</div></div>
+<div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m2-wire">—</div><div class="card-sub" id="m2-wire-sub">MongoDB compat</div></div>
+<div class="card card-version"><div class="card-label">FerretDB version</div><div class="card-value" id="m2-version">—</div><div class="card-sub">binary version</div></div>
+<div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m2-backend" style="font-size:1.1rem">—</div><div class="card-sub" id="m2-target">…</div></div>
+<div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m2-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
 </div>
 <section class="section">
 <div class="section-title">Actions interactives</div>

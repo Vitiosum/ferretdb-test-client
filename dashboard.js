@@ -55,6 +55,27 @@ async function refresh() {
     $('ft-version').textContent = s.ferretdb_version;
     $('ft-target').textContent = targetMasked;
     if (firstStatus) { addRow('status', 'Connecté à ' + s.target + ' (FerretDB ' + s.ferretdb_version + ')', true); firstStatus = false; }
+    // v2 cards
+    if (s.v2) {
+      if (s.v2.ok) {
+        flashUpdate($('m2-status'), 'OK');
+        $('m2-status-sub').textContent = 'connecté';
+        flashUpdate($('m2-ping'), s.v2.ping_ms + ' ms');
+        flashUpdate($('m2-wire'), s.v2.wire_version);
+        $('m2-wire-sub').textContent = 'compat ' + s.v2.mongo_compat;
+        flashUpdate($('m2-version'), s.v2.ferretdb_version);
+        flashUpdate($('m2-backend'), s.v2.backend);
+        const t2Masked = (s.v2.target || '').replace(/app_[a-f0-9-]+/, '<private app>').replace(/ng_[a-f0-9-]+/, '<network-group>');
+        $('m2-target').textContent = t2Masked;
+        flashUpdate($('m2-docs'), s.v2.docs_in_dashboard);
+      } else {
+        $('m2-status').textContent = 'KO';
+        $('m2-status-sub').textContent = s.v2.error || 'erreur';
+      }
+    } else {
+      $('m2-status').textContent = 'N/A';
+      $('m2-status-sub').textContent = 'MONGO_URI_V2 non défini';
+    }
   } catch (e) {
     $('m-status').textContent = 'KO';
     $('m-status-sub').textContent = e.message;
