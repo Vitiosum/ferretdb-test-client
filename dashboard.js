@@ -317,3 +317,87 @@ $('btn-compat').onclick = async () => {
   b.disabled = false; b.textContent = oldT;
 };
 updateScorecard();
+
+// ─── Comparaison v1 vs v2 ───
+const COMPAT_TESTS_LIST = [
+  ['crud', 'CRUD complet'],
+  ['regex', '$regex'],
+  ['bulk_write', 'bulkWrite'],
+  ['index_simple', 'Index simple'],
+  ['index_unique', 'Index unique'],
+  ['index_compound', 'Index composé'],
+  ['text_search', '$text search'],
+  ['group_sum', '$group + $sum'],
+  ['group_avg', '$group + $avg'],
+  ['group_max_min', '$group + $max/$min'],
+  ['sample', '$sample'],
+  ['lookup', '$lookup (JOIN)'],
+  ['transaction', 'Transactions multi-doc'],
+  ['change_stream', 'Change streams'],
+];
+
+async function runOne(name, engine) {
+  try {
+    const r = await fetch('/api/compat/' + name + '?engine=' + engine);
+    const j = await r.json();
+    const isErr = j.error || j.codeName === 'NotImplemented' || j.ok === false;
+    return { ok: !isErr, detail: isErr ? (j.codeName || j.error || 'KO') : 'OK' };
+  } catch (e) { return { ok: false, detail: e.message }; }
+}
+
+const btnCompare = $('btn-compare');
+if (btnCompare) btnCompare.onclick = async (ev) => {
+  const btn = ev.currentTarget; btn.disabled = true; const oldT = btn.textContent; btn.textContent = '⏳ 28 tests…';
+  const out = $('compare-out');
+  out.style.display = 'block';
+  while (out.firstChild) out.removeChild(out.firstChild);
+
+  const summary = el('div', 'compare-summary');
+  const s1 = el('div', 'compare-stat v1');
+  s1.appendChild(el('div', 'compare-stat-big', '…')); s1.appendChild(el('div', 'compare-stat-label', 'FerretDB v1.24'));
+  summary.appendChild(s1);
+  const s2 = el('div', 'compare-stat v2');
+  s2.appendChild(el('div', 'compare-stat-big', '…')); s2.appendChild(el('div', 'compare-stat-label', 'FerretDB v2.7'));
+  summary.appendChild(s2);
+  const sd = el('div', 'compare-stat delta');
+  sd.appendChild(el('div', 'compare-stat-big', '…')); sd.appendChild(el('div', 'compare-stat-label', 'Gain v2'));
+  summary.appendChild(sd);
+  out.appendChild(summary);
+
+  const table = el('table', 'compare-table');
+  const thead = el('thead'); const trh = el('tr');
+  trh.appendChild(el('th', null, 'Feature'));
+  trh.appendChild(el('th', 'engine-col v1', 'FerretDB v1'));
+  trh.appendChild(el('th', 'engine-col v2', 'FerretDB v2'));
+  trh.appendChild(el('th', 'engine-col', 'Δ'));
+  thead.appendChild(trh); table.appendChild(thead);
+  const tbody = el('tbody');
+  table.appendChild(tbody);
+  out.appendChild(table);
+
+  let nV1Ok = 0, nV2Ok = 0, nGain = 0;
+  for (const [name, label] of COMPAT_TESTS_LIST) {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'feat', label));
+    const tdV1 = el('td', 'cell', '…'); tr.appendChild(tdV1);
+    const tdV2 = el('td', 'cell', '…'); tr.appendChild(tdV2);
+    const tdDelta = el('td', 'cell', '—'); tr.appendChild(tdDelta);
+    tbody.appendChild(tr);
+
+    const [rv1, rv2] = await Promise.all([runOne(name, 'v1'), runOne(name, 'v2')]);
+    tdV1.className = 'cell ' + (rv1.ok ? 'ok' : 'ko'); tdV1.textContent = rv1.ok ? '✓ OK' : '✗ ' + rv1.detail; tdV1.title = rv1.detail;
+    tdV2.className = 'cell ' + (rv2.ok ? 'ok' : 'ko'); tdV2.textContent = rv2.ok ? '✓ OK' : '✗ ' + rv2.detail; tdV2.title = rv2.detail;
+    if (rv1.ok) nV1Ok++;
+    if (rv2.ok) nV2Ok++;
+    if (!rv1.ok && rv2.ok) { tdDelta.className = 'cell gain'; tdDelta.textContent = '+ v2'; nGain++; }
+    else if (rv1.ok && !rv2.ok) { tdDelta.className = 'cell ko'; tdDelta.textContent = '- v2'; }
+    else { tdDelta.textContent = '='; }
+
+    s1.children[0].textContent = nV1Ok + '/' + COMPAT_TESTS_LIST.length;
+    s2.children[0].textContent = nV2Ok + '/' + COMPAT_TESTS_LIST.length;
+    sd.children[0].textContent = (nGain > 0 ? '+' : '') + nGain;
+  }
+
+  addRow('compare', 'v1=' + nV1Ok + '/14 · v2=' + nV2Ok + '/14 · gains v2: ' + nGain, true);
+  btn.disabled = false; btn.textContent = oldT;
+};
