@@ -963,6 +963,16 @@ button.danger:hover{background:hsl(0,75%,50%,0.1)}
 .split-badge.v1{background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);color:#fbbf24}
 .split-badge.v2{background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.3);color:#86efac}
 .split-sub{font-size:11px;color:hsl(0,0%,55%);letter-spacing:-0.01em}
+.conn-split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.conn-split{grid-template-columns:1fr}}
+.conn-panel{background:hsl(0,0%,9%);border:1px solid hsl(0,0%,18%);border-radius:14px;padding:18px;position:relative;overflow:hidden}
+.conn-panel.split-v1{border-top:3px solid #fbbf24}
+.conn-panel.split-v2{border-top:3px solid #22c55e}
+.conn-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:560px){.conn-grid{grid-template-columns:1fr 1fr}}
+.conn-grid .card{padding:14px}
+.conn-grid .card-value{font-size:1.3rem}
+.conn-grid .card-sub{font-size:9px}
 footer{padding:40px 0 60px;color:hsl(0,0%,40%);font-size:11px;text-align:center}
 footer a{color:#60a5fa;text-decoration:none}
 .muted{color:hsl(0,0%,50%);font-size:11px;margin-left:8px}
@@ -976,23 +986,30 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="hero-serif">MongoDB API on Postgres, on Clever Cloud</div>
 <p class="hero-sub">Cette page parle Mongo wire protocol à FerretDB via le Network Group, qui parle SQL/TLS à un add-on PostgreSQL managé. Polling auto toutes les 2 secondes.</p>
 </section>
-<div class="section-title">État de la connexion — FerretDB v1 (proxy → PG add-on managé)</div>
-<div class="grid">
-<div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m-status">—</div><div class="card-sub" id="m-status-sub">…</div></div>
-<div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m-ping">—</div><div class="card-sub">via Network Group</div></div>
-<div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m-wire">—</div><div class="card-sub" id="m-wire-sub">MongoDB compat</div></div>
-<div class="card card-version"><div class="card-label">FerretDB version</div><div class="card-value" id="m-version">—</div><div class="card-sub">binary version</div></div>
-<div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m-backend" style="font-size:1.1rem">—</div><div class="card-sub" id="m-target">…</div></div>
-<div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
-</div>
-<div class="section-title" style="margin-top:24px">État de la connexion — FerretDB v2 (eval image, PG embarqué self-hosted)</div>
-<div class="grid">
-<div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m2-status">—</div><div class="card-sub" id="m2-status-sub">…</div></div>
-<div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m2-ping">—</div><div class="card-sub">via Network Group</div></div>
-<div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m2-wire">—</div><div class="card-sub" id="m2-wire-sub">MongoDB compat</div></div>
-<div class="card card-version"><div class="card-label">FerretDB version</div><div class="card-value" id="m2-version">—</div><div class="card-sub">binary version</div></div>
-<div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m2-backend" style="font-size:1.1rem">—</div><div class="card-sub" id="m2-target">…</div></div>
-<div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m2-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
+<div class="section-title">État de la connexion — v1 vs v2 (live)</div>
+<div class="conn-split">
+  <div class="conn-panel split-v1">
+    <div class="split-header"><span class="split-badge v1">FerretDB v1.24</span><span class="split-sub">proxy → PG add-on managé</span></div>
+    <div class="conn-grid">
+      <div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m-status">—</div><div class="card-sub" id="m-status-sub">…</div></div>
+      <div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m-ping">—</div><div class="card-sub">via NG</div></div>
+      <div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m-wire">—</div><div class="card-sub" id="m-wire-sub">MongoDB compat</div></div>
+      <div class="card card-version"><div class="card-label">Version</div><div class="card-value" id="m-version">—</div><div class="card-sub">binary version</div></div>
+      <div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m-backend" style="font-size:1rem">—</div><div class="card-sub" id="m-target">…</div></div>
+      <div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
+    </div>
+  </div>
+  <div class="conn-panel split-v2">
+    <div class="split-header"><span class="split-badge v2">FerretDB v2.7</span><span class="split-sub">eval image · PG embarqué self-hosted</span></div>
+    <div class="conn-grid">
+      <div class="card card-status"><div class="card-label">Status</div><div class="card-value" id="m2-status">—</div><div class="card-sub" id="m2-status-sub">…</div></div>
+      <div class="card card-ping"><div class="card-label">Ping</div><div class="card-value" id="m2-ping">—</div><div class="card-sub">via NG</div></div>
+      <div class="card card-wire"><div class="card-label">Wire protocol</div><div class="card-value" id="m2-wire">—</div><div class="card-sub" id="m2-wire-sub">MongoDB compat</div></div>
+      <div class="card card-version"><div class="card-label">Version</div><div class="card-value" id="m2-version">—</div><div class="card-sub">binary version</div></div>
+      <div class="card card-backend"><div class="card-label">Backend</div><div class="card-value" id="m2-backend" style="font-size:1rem">—</div><div class="card-sub" id="m2-target">…</div></div>
+      <div class="card card-docs"><div class="card-label">Docs dashboard</div><div class="card-value" id="m2-docs">—</div><div class="card-sub">collection « dashboard »</div></div>
+    </div>
+  </div>
 </div>
 <section class="section">
 <div class="section-title">Actions interactives</div>
