@@ -284,7 +284,7 @@ $('btn-explain-byid').onclick = (ev) => runExplain('/api/explain/by_id', 'by _id
 // ─── Scorecard ───
 function updateScorecard() {
   const cats = { crud: { ok: 0, total: 0 }, index: { ok: 0, total: 0 }, agg: { ok: 0, total: 0 }, adv: { ok: 0, total: 0 } };
-  document.querySelectorAll('[data-cat]').forEach(p => {
+  document.querySelectorAll('.compat-state[data-cat]').forEach(p => {
     const cat = p.getAttribute('data-cat');
     if (!cats[cat]) return;
     cats[cat].total++;
