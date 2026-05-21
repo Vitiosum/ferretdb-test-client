@@ -580,10 +580,11 @@ const routes = {
   },
 
   '/api/compat/transaction': async (req) => {
-    const db = await getDb(engineFromUrl(req.url));
+    const engine = engineFromUrl(req.url);
+    const db = await getDb(engine);
     const col = db.collection('compat_tx');
     await col.drop().catch(() => {});
-    const sess = client.startSession();
+    const sess = clients[engine].startSession();
     try {
       await sess.withTransaction(async () => {
         await col.insertOne({ a: 1 }, { session: sess });
