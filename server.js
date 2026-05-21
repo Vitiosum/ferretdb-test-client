@@ -1042,8 +1042,11 @@ const server = http.createServer(async (req, res) => {
       const out = await routes[url]();
       res.end(JSON.stringify(out, null, 2));
     } catch (e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message, name: e.name, code: e.code, codeName: e.codeName }, null, 2));
+      // Compat tests are EXPECTED to fail on FerretDB v1 (NotImplemented for transactions, text_search, etc.)
+      // Return 200 so Chrome Console doesn't flag them as errors — the body carries the real status
+      const isCompat = url.startsWith('/api/compat/');
+      res.statusCode = isCompat ? 200 : 500;
+      res.end(JSON.stringify({ ok: false, error: e.message, name: e.name, code: e.code, codeName: e.codeName }, null, 2));
     }
     return;
   }
