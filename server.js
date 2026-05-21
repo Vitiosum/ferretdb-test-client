@@ -1003,7 +1003,37 @@ footer a{color:#60a5fa;text-decoration:none}
 </section>
 <footer>Vitio1 · par · FerretDB <span id="ft-version">…</span> · target <span id="ft-target">…</span> · <a href="/server/info">/server/info</a> · <a href="/bench">/bench (full)</a> · <a href="/diag">/diag</a></footer>
 </div>
+<div id="js-debug" style="position:fixed;bottom:10px;right:10px;max-width:520px;max-height:300px;overflow:auto;background:rgba(20,0,0,0.95);border:1px solid #ef4444;border-radius:8px;padding:10px;font-family:monospace;font-size:11px;color:#fca5a5;z-index:9999;display:none">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+<strong style="color:#fef2f2">JS errors (debug)</strong>
+<button onclick="document.getElementById('js-debug').style.display='none'" style="background:transparent;border:1px solid #ef4444;color:#fca5a5;padding:2px 8px;cursor:pointer;font-size:10px">✕</button>
+</div>
+<div id="js-debug-content"></div>
+</div>
 <script>
+window.onerror = function(msg, src, line, col, err) {
+  const d = document.getElementById('js-debug');
+  const c = document.getElementById('js-debug-content');
+  if (d && c) {
+    d.style.display = 'block';
+    const div = document.createElement('div');
+    div.style.cssText = 'border-top:1px dotted #7f1d1d;padding:4px 0;margin-top:4px';
+    div.textContent = '⚠ ' + msg + ' @ line ' + line + ':' + col;
+    c.appendChild(div);
+  }
+  return false;
+};
+window.addEventListener('unhandledrejection', function(ev) {
+  const d = document.getElementById('js-debug');
+  const c = document.getElementById('js-debug-content');
+  if (d && c) {
+    d.style.display = 'block';
+    const div = document.createElement('div');
+    div.style.cssText = 'border-top:1px dotted #7f1d1d;padding:4px 0;margin-top:4px';
+    div.textContent = '⚠ Promise: ' + (ev.reason && ev.reason.message || ev.reason);
+    c.appendChild(div);
+  }
+});
 const $ = id => document.getElementById(id);
 const feed = $('feed');
 let firstStatus = true;
