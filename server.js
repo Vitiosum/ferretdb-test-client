@@ -18,23 +18,42 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
+const MONGO_URI_V2 = process.env.MONGO_URI_V2 || '';
+
 const parsedUri = new URL(MONGO_URI.replace('mongodb://', 'http://'));
 const MONGO_HOST = parsedUri.hostname;
 const MONGO_PORT = parseInt(parsedUri.port || '27017', 10);
 
-let client;
-async function getDb() {
-  if (!client) {
-    client = new MongoClient(MONGO_URI, {
-      retryWrites: false,
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-    });
-    client.on('error', e => console.error('Mongo error event:', e));
-    await client.connect();
-    console.log('✓ Connecté à FerretDB');
+const clients = { v1: null, v2: null };
+let client; // alias for backward compat (v1)
+async function getDb(engine = 'v1') {
+  if (engine === 'v2') {
+    if (!MONGO_URI_V2) throw new Error('MONGO_URI_V2 non configuré (compare v1/v2 indisponible)');
+    if (!clients.v2) {
+      const c = new MongoClient(MONGO_URI_V2, { retryWrites: false, serverSelectionTimeoutMS: 5000, connectTimeoutMS: 5000 });
+      c.on('error', e => console.error('Mongo v2 error event:', e));
+      await c.connect();
+      clients.v2 = c;
+      console.log('✓ Connecté à FerretDB v2');
+    }
+    return clients.v2.db('test');
   }
-  return client.db('test');
+  if (!clients.v1) {
+    const c = new MongoClient(MONGO_URI, { retryWrites: false, serverSelectionTimeoutMS: 5000, connectTimeoutMS: 5000 });
+    c.on('error', e => console.error('Mongo v1 error event:', e));
+    await c.connect();
+    clients.v1 = c;
+    client = c;
+    console.log('✓ Connecté à FerretDB v1');
+  }
+  return clients.v1.db('test');
+}
+// Helper for routes: read engine from req.url query string
+function engineFromUrl(reqUrl) {
+  try {
+    const u = new URL(reqUrl, 'http://localhost');
+    return u.searchParams.get('engine') === 'v2' ? 'v2' : 'v1';
+  } catch { return 'v1'; }
 }
 
 async function tcpProbe(host, port, timeoutMs = 4000) {
@@ -423,8 +442,8 @@ const routes = {
   },
 
   // ─── Tests de compatibilité honnêtes : chaque endpoint exécute RÉELLEMENT l'opérateur annoncé ───
-  '/api/compat/crud': async () => {
-    const db = await getDb();
+  '/api/compat/crud': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_crud');
     await col.drop().catch(() => {});
     const ins = await col.insertMany([{ n: 1 }, { n: 2 }, { n: 3 }]);
@@ -435,8 +454,8 @@ const routes = {
     return { ok: true, inserted: ins.insertedCount, found: !!found, modified: upd.modifiedCount, deleted: del.deletedCount };
   },
 
-  '/api/compat/index_simple': async () => {
-    const db = await getDb();
+  '/api/compat/index_simple': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_idx_simple');
     await col.drop().catch(() => {});
     await col.insertMany([{ v: 1 }, { v: 2 }, { v: 3 }]);
@@ -446,8 +465,8 @@ const routes = {
     return { ok: true, indexes: idxs.length };
   },
 
-  '/api/compat/index_unique': async () => {
-    const db = await getDb();
+  '/api/compat/index_unique': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_idx_unique');
     await col.drop().catch(() => {});
     await col.createIndex({ email: 1 }, { unique: true });
@@ -458,8 +477,8 @@ const routes = {
     return { ok: collided, collided };
   },
 
-  '/api/compat/index_compound': async () => {
-    const db = await getDb();
+  '/api/compat/index_compound': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_idx_compound');
     await col.drop().catch(() => {});
     await col.createIndex({ kind: 1, ts: -1 });
@@ -469,8 +488,8 @@ const routes = {
     return { ok: true, count: idxs.length };
   },
 
-  '/api/compat/group_sum': async () => {
-    const db = await getDb();
+  '/api/compat/group_sum': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_agg');
     await col.drop().catch(() => {});
     await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
@@ -479,8 +498,8 @@ const routes = {
     return { ok: true, result: r };
   },
 
-  '/api/compat/group_avg': async () => {
-    const db = await getDb();
+  '/api/compat/group_avg': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_agg');
     await col.drop().catch(() => {});
     await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
@@ -489,8 +508,8 @@ const routes = {
     return { ok: true, result: r };
   },
 
-  '/api/compat/group_max_min': async () => {
-    const db = await getDb();
+  '/api/compat/group_max_min': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_agg');
     await col.drop().catch(() => {});
     await col.insertMany([{ k: 'a', v: 10 }, { k: 'a', v: 20 }, { k: 'b', v: 5 }]);
@@ -499,8 +518,8 @@ const routes = {
     return { ok: true, result: r };
   },
 
-  '/api/compat/sample': async () => {
-    const db = await getDb();
+  '/api/compat/sample': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_sample');
     await col.drop().catch(() => {});
     await col.insertMany(Array.from({ length: 50 }, (_, i) => ({ i })));
@@ -509,8 +528,8 @@ const routes = {
     return { ok: true, picked: r.length };
   },
 
-  '/api/compat/lookup': async () => {
-    const db = await getDb();
+  '/api/compat/lookup': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const users = db.collection('compat_users');
     const orders = db.collection('compat_orders');
     await users.drop().catch(() => {});
@@ -525,8 +544,8 @@ const routes = {
     return { ok: true, joined: r };
   },
 
-  '/api/compat/regex': async () => {
-    const db = await getDb();
+  '/api/compat/regex': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_regex');
     await col.drop().catch(() => {});
     await col.insertMany([{ name: 'Apple' }, { name: 'apricot' }, { name: 'banana' }]);
@@ -535,8 +554,8 @@ const routes = {
     return { ok: r.length === 2, matched: r.length };
   },
 
-  '/api/compat/bulk_write': async () => {
-    const db = await getDb();
+  '/api/compat/bulk_write': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_bulk');
     await col.drop().catch(() => {});
     const r = await col.bulkWrite([
@@ -549,8 +568,8 @@ const routes = {
     return { ok: true, inserted: r.insertedCount, modified: r.modifiedCount, deleted: r.deletedCount };
   },
 
-  '/api/compat/text_search': async () => {
-    const db = await getDb();
+  '/api/compat/text_search': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_text');
     await col.drop().catch(() => {});
     await col.insertMany([{ d: 'the quick brown fox' }, { d: 'jumps over' }, { d: 'lazy dog' }]);
@@ -560,8 +579,8 @@ const routes = {
     return { ok: true, matched: r.length };
   },
 
-  '/api/compat/transaction': async () => {
-    const db = await getDb();
+  '/api/compat/transaction': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_tx');
     await col.drop().catch(() => {});
     const sess = client.startSession();
@@ -703,8 +722,8 @@ const routes = {
     };
   },
 
-  '/api/explain': async () => {
-    const db = await getDb();
+  '/api/explain': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('explain_target');
     await col.drop().catch(() => {});
     await col.insertMany(Array.from({ length: 200 }, (_, i) => ({ i, kind: ['a', 'b', 'c'][i % 3], v: Math.random() })));
@@ -719,8 +738,8 @@ const routes = {
     };
   },
 
-  '/api/explain/by_id': async () => {
-    const db = await getDb();
+  '/api/explain/by_id': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('explain_target_by_id');
     await col.drop().catch(() => {});
     const N = 10000;
@@ -746,8 +765,8 @@ const routes = {
     };
   },
 
-  '/api/explain/large': async () => {
-    const db = await getDb();
+  '/api/explain/large': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('explain_target_large');
     await col.drop().catch(() => {});
     const N = 10000;
@@ -774,8 +793,8 @@ const routes = {
     };
   },
 
-  '/api/compat/change_stream': async () => {
-    const db = await getDb();
+  '/api/compat/change_stream': async (req) => {
+    const db = await getDb(engineFromUrl(req.url));
     const col = db.collection('compat_cs');
     await col.drop().catch(() => {});
     await col.insertOne({ init: true }); // collection exists
@@ -903,6 +922,26 @@ button.danger:hover{background:hsl(0,75%,50%,0.1)}
 .pattern-table tr:last-child td{border-bottom:none}
 .diff-old{background:rgba(239,68,68,0.08);color:#fca5a5}
 .diff-new{background:rgba(34,197,94,0.08);color:#86efac}
+.compare-table{width:100%;border-collapse:collapse;font-size:12px;background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:10px;overflow:hidden}
+.compare-table th{padding:10px 14px;text-align:left;background:hsl(0,0%,13%);border-bottom:1px solid hsl(0,0%,20%);color:hsl(0,0%,75%);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.08em}
+.compare-table th.engine-col{text-align:center;width:130px}
+.compare-table th.engine-col.v1{color:#fbbf24}
+.compare-table th.engine-col.v2{color:#86efac}
+.compare-table td{padding:10px 14px;border-bottom:1px solid hsl(0,0%,16%)}
+.compare-table tr:last-child td{border-bottom:none}
+.compare-table tr:hover td{background:hsl(0,0%,13%)}
+.compare-table td.feat{color:hsl(0,0%,90%);font-weight:500}
+.compare-table td.cell{text-align:center;font-family:'DM Mono',monospace;font-size:11px}
+.compare-table td.cell.ok{color:#22c55e}
+.compare-table td.cell.ko{color:#ef4444}
+.compare-table td.cell.gain{color:#3b82f6;font-weight:600}
+.compare-summary{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px}
+.compare-stat{background:hsl(0,0%,11%);border:1px solid hsl(0,0%,20%);border-radius:10px;padding:14px;text-align:center}
+.compare-stat-big{font-family:'DM Mono',monospace;font-size:2.2rem;font-weight:300;line-height:1}
+.compare-stat-label{font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:hsl(0,0%,55%);margin-top:6px}
+.compare-stat.v1 .compare-stat-big{color:#fbbf24}
+.compare-stat.v2 .compare-stat-big{color:#86efac}
+.compare-stat.delta .compare-stat-big{color:#3b82f6}
 footer{padding:40px 0 60px;color:hsl(0,0%,40%);font-size:11px;text-align:center}
 footer a{color:#60a5fa;text-decoration:none}
 .muted{color:hsl(0,0%,50%);font-size:11px;margin-left:8px}
@@ -1005,7 +1044,11 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="compat-pill"><span class="compat-name">Transactions multi-doc</span><span class="compat-state pending" data-test="transaction" data-cat="adv">pending</span></div>
 <div class="compat-pill"><span class="compat-name">Change streams</span><span class="compat-state pending" data-test="change_stream" data-cat="adv">pending</span></div>
 </div>
-<div class="actions" style="margin-top:14px"><button id="btn-compat">Lancer les tests compat</button></div>
+<div class="actions" style="margin-top:14px">
+<button id="btn-compat">Lancer les tests compat (v1)</button>
+<button id="btn-compare" class="primary">⚡ Comparer v1 vs v2 (live)</button>
+</div>
+<div class="compare-out" id="compare-out" style="display:none;margin-top:18px"></div>
 </section>
 <footer>Vitio1 · par · FerretDB <span id="ft-version">…</span> · target <span id="ft-target">…</span> · <a href="/server/info">/server/info</a> · <a href="/bench">/bench (full)</a> · <a href="/diag">/diag</a></footer>
 </div>
@@ -1039,7 +1082,7 @@ const server = http.createServer(async (req, res) => {
 
   if (routes[url]) {
     try {
-      const out = await routes[url]();
+      const out = await routes[url](req);
       res.end(JSON.stringify(out, null, 2));
     } catch (e) {
       // Compat tests are EXPECTED to fail on FerretDB v1 (NotImplemented for transactions, text_search, etc.)
