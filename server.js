@@ -953,6 +953,16 @@ button.danger:hover{background:hsl(0,75%,50%,0.1)}
 .compare-stat.v1 .compare-stat-big{color:#fbbf24}
 .compare-stat.v2 .compare-stat-big{color:#86efac}
 .compare-stat.delta .compare-stat-big{color:#3b82f6}
+.split-panels{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.split-panels{grid-template-columns:1fr}}
+.split-panel{background:hsl(0,0%,9%);border:1px solid hsl(0,0%,18%);border-radius:14px;padding:18px;position:relative;overflow:hidden}
+.split-panel.split-v1{border-top:3px solid #fbbf24}
+.split-panel.split-v2{border-top:3px solid #22c55e}
+.split-header{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.split-badge{font-family:'DM Mono',monospace;font-size:13px;font-weight:500;padding:4px 10px;border-radius:6px;letter-spacing:-0.01em}
+.split-badge.v1{background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);color:#fbbf24}
+.split-badge.v2{background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.3);color:#86efac}
+.split-sub{font-size:11px;color:hsl(0,0%,55%);letter-spacing:-0.01em}
 footer{padding:40px 0 60px;color:hsl(0,0%,40%);font-size:11px;text-align:center}
 footer a{color:#60a5fa;text-decoration:none}
 .muted{color:hsl(0,0%,50%);font-size:11px;margin-left:8px}
@@ -1035,40 +1045,44 @@ footer a{color:#60a5fa;text-decoration:none}
 <div class="bench-grid" id="bench-grid"></div>
 </section>
 <section class="section">
-<div class="section-title">Compatibilité MongoDB testée live</div>
-<div class="scorecard" id="scorecard">
-  <div class="score-main">
-    <div class="score-big" id="score-big">—</div>
-    <div class="score-label">features Mongo supportées</div>
+<div class="section-title">Compatibilité MongoDB testée live — v1 vs v2 côte-à-côte</div>
+<div class="actions" style="margin-bottom:14px">
+<button id="btn-compare" class="primary">⚡ Lancer les tests sur v1 + v2</button>
+</div>
+<div class="split-panels">
+  <div class="split-panel split-v1">
+    <div class="split-header"><span class="split-badge v1">FerretDB v1.24</span><span class="split-sub">proxy → PG add-on managé</span></div>
+    <div class="scorecard">
+      <div class="score-main">
+        <div class="score-big" id="score-big-v1">—</div>
+        <div class="score-label">features supportées</div>
+      </div>
+      <div class="score-bars">
+        <div class="score-bar"><span class="score-bar-name">CRUD &amp; queries</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v1-crud"></span></span><span class="score-bar-val" id="val-v1-crud">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Indexing</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v1-index"></span></span><span class="score-bar-val" id="val-v1-index">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Aggregation</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v1-agg"></span></span><span class="score-bar-val" id="val-v1-agg">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Advanced</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v1-adv"></span></span><span class="score-bar-val" id="val-v1-adv">…</span></div>
+      </div>
+    </div>
+    <div class="compat-grid" id="compat-grid-v1"></div>
   </div>
-  <div class="score-bars">
-    <div class="score-bar" data-cat="crud"><span class="score-bar-name">CRUD &amp; queries</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-crud"></span></span><span class="score-bar-val" id="val-crud">…</span></div>
-    <div class="score-bar" data-cat="index"><span class="score-bar-name">Indexing</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-index"></span></span><span class="score-bar-val" id="val-index">…</span></div>
-    <div class="score-bar" data-cat="agg"><span class="score-bar-name">Aggregation</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-agg"></span></span><span class="score-bar-val" id="val-agg">…</span></div>
-    <div class="score-bar" data-cat="adv"><span class="score-bar-name">Advanced</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-adv"></span></span><span class="score-bar-val" id="val-adv">…</span></div>
+  <div class="split-panel split-v2">
+    <div class="split-header"><span class="split-badge v2">FerretDB v2.7</span><span class="split-sub">eval image · PG embarqué self-hosted</span></div>
+    <div class="scorecard">
+      <div class="score-main">
+        <div class="score-big" id="score-big-v2">—</div>
+        <div class="score-label">features supportées</div>
+      </div>
+      <div class="score-bars">
+        <div class="score-bar"><span class="score-bar-name">CRUD &amp; queries</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v2-crud"></span></span><span class="score-bar-val" id="val-v2-crud">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Indexing</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v2-index"></span></span><span class="score-bar-val" id="val-v2-index">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Aggregation</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v2-agg"></span></span><span class="score-bar-val" id="val-v2-agg">…</span></div>
+        <div class="score-bar"><span class="score-bar-name">Advanced</span><span class="score-bar-track"><span class="score-bar-fill" id="bar-v2-adv"></span></span><span class="score-bar-val" id="val-v2-adv">…</span></div>
+      </div>
+    </div>
+    <div class="compat-grid" id="compat-grid-v2"></div>
   </div>
 </div>
-<div class="compat-grid" id="compat-grid">
-<div class="compat-pill"><span class="compat-name">CRUD complet</span><span class="compat-state pending" data-test="crud" data-cat="crud">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$regex</span><span class="compat-state pending" data-test="regex" data-cat="crud">pending</span></div>
-<div class="compat-pill"><span class="compat-name">bulkWrite</span><span class="compat-state pending" data-test="bulk_write" data-cat="crud">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index simple</span><span class="compat-state pending" data-test="index_simple" data-cat="index">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index unique</span><span class="compat-state pending" data-test="index_unique" data-cat="index">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Index composé</span><span class="compat-state pending" data-test="index_compound" data-cat="index">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$text search</span><span class="compat-state pending" data-test="text_search" data-cat="index">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $sum</span><span class="compat-state pending" data-test="group_sum" data-cat="agg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $avg</span><span class="compat-state pending" data-test="group_avg" data-cat="agg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$group + $max/$min</span><span class="compat-state pending" data-test="group_max_min" data-cat="agg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$sample</span><span class="compat-state pending" data-test="sample" data-cat="agg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">$lookup (JOIN)</span><span class="compat-state pending" data-test="lookup" data-cat="agg">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Transactions multi-doc</span><span class="compat-state pending" data-test="transaction" data-cat="adv">pending</span></div>
-<div class="compat-pill"><span class="compat-name">Change streams</span><span class="compat-state pending" data-test="change_stream" data-cat="adv">pending</span></div>
-</div>
-<div class="actions" style="margin-top:14px">
-<button id="btn-compat">Lancer les tests compat (v1)</button>
-<button id="btn-compare" class="primary">⚡ Comparer v1 vs v2 (live)</button>
-</div>
-<div class="compare-out" id="compare-out" style="display:none;margin-top:18px"></div>
 </section>
 <footer>Vitio1 · par · FerretDB <span id="ft-version">…</span> · target <span id="ft-target">…</span> · <a href="/server/info">/server/info</a> · <a href="/bench">/bench (full)</a> · <a href="/diag">/diag</a></footer>
 </div>

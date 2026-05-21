@@ -281,10 +281,43 @@ $('btn-explain-small').onclick = (ev) => runExplain('/api/explain', 'small (200)
 $('btn-explain-large').onclick = (ev) => runExplain('/api/explain/large', 'large (10k, filter on field)', ev.currentTarget);
 $('btn-explain-byid').onclick = (ev) => runExplain('/api/explain/by_id', 'by _id (10k)', ev.currentTarget);
 
-// ─── Scorecard ───
-function updateScorecard() {
+// ─── Split dashboard v1 vs v2 ───
+const SPLIT_TESTS = [
+  { name: 'crud', label: 'CRUD complet', cat: 'crud' },
+  { name: 'regex', label: '$regex', cat: 'crud' },
+  { name: 'bulk_write', label: 'bulkWrite', cat: 'crud' },
+  { name: 'index_simple', label: 'Index simple', cat: 'index' },
+  { name: 'index_unique', label: 'Index unique', cat: 'index' },
+  { name: 'index_compound', label: 'Index composé', cat: 'index' },
+  { name: 'text_search', label: '$text search', cat: 'index' },
+  { name: 'group_sum', label: '$group + $sum', cat: 'agg' },
+  { name: 'group_avg', label: '$group + $avg', cat: 'agg' },
+  { name: 'group_max_min', label: '$group + $max/$min', cat: 'agg' },
+  { name: 'sample', label: '$sample', cat: 'agg' },
+  { name: 'lookup', label: '$lookup (JOIN)', cat: 'agg' },
+  { name: 'transaction', label: 'Transactions multi-doc', cat: 'adv' },
+  { name: 'change_stream', label: 'Change streams', cat: 'adv' },
+];
+
+function buildSplitGrid(engine) {
+  const grid = $('compat-grid-' + engine);
+  if (!grid) return;
+  while (grid.firstChild) grid.removeChild(grid.firstChild);
+  SPLIT_TESTS.forEach(t => {
+    const pill = el('div', 'compat-pill');
+    pill.appendChild(el('span', 'compat-name', t.label));
+    const state = el('span', 'compat-state pending', 'pending');
+    state.setAttribute('data-test', engine + '-' + t.name);
+    state.setAttribute('data-cat', t.cat);
+    state.setAttribute('data-engine', engine);
+    pill.appendChild(state);
+    grid.appendChild(pill);
+  });
+}
+
+function updateSplitScorecard(engine) {
   const cats = { crud: { ok: 0, total: 0 }, index: { ok: 0, total: 0 }, agg: { ok: 0, total: 0 }, adv: { ok: 0, total: 0 } };
-  document.querySelectorAll('.compat-state[data-cat]').forEach(p => {
+  document.querySelectorAll('[data-engine="' + engine + '"]').forEach(p => {
     const cat = p.getAttribute('data-cat');
     if (!cats[cat]) return;
     cats[cat].total++;
@@ -294,50 +327,42 @@ function updateScorecard() {
   Object.entries(cats).forEach(([k, v]) => {
     totalOk += v.ok; totalAll += v.total;
     const pct = v.total ? Math.round((v.ok / v.total) * 100) : 0;
-    const bar = $('bar-' + k); const val = $('val-' + k);
+    const bar = $('bar-' + engine + '-' + k); const val = $('val-' + engine + '-' + k);
     if (bar) bar.style.width = pct + '%';
     if (val) val.textContent = v.ok + '/' + v.total;
   });
-  $('score-big').textContent = totalOk + '/' + totalAll;
+  $('score-big-' + engine).textContent = totalOk + '/' + totalAll;
 }
 
-$('btn-compat').onclick = async () => {
-  const b = $('btn-compat'); b.disabled = true; const oldT = b.textContent; b.textContent = 'Running…';
-  document.querySelectorAll('[data-test]').forEach(el2 => { el2.className='compat-state pending'; el2.textContent='pending'; });
-  updateScorecard();
-  addRow('compat', 'Lancement de 14 tests de compatibilité Mongo réels…');
-  const tests = [
-    ['crud',            '/api/compat/crud'],
-    ['index_simple',    '/api/compat/index_simple'],
-    ['index_unique',    '/api/compat/index_unique'],
-    ['index_compound',  '/api/compat/index_compound'],
-    ['group_sum',       '/api/compat/group_sum'],
-    ['group_avg',       '/api/compat/group_avg'],
-    ['group_max_min',   '/api/compat/group_max_min'],
-    ['sample',          '/api/compat/sample'],
-    ['lookup',          '/api/compat/lookup'],
-    ['regex',           '/api/compat/regex'],
-    ['bulk_write',      '/api/compat/bulk_write'],
-    ['text_search',     '/api/compat/text_search'],
-    ['transaction',     '/api/compat/transaction'],
-    ['change_stream',   '/api/compat/change_stream'],
-  ];
-  let nOk = 0, nKo = 0;
-  for (const [name, ep] of tests) {
-    try {
-      const r = await fetch(ep);
-      const j = await r.json();
-      const isErr = j.error || j.codeName === 'NotImplemented' || j.ok === false;
-      setCompat(name, !isErr, isErr ? (j.codeName || j.error || 'KO') : 'OK');
-      addRow('compat', name + ' : ' + (isErr ? '❌ ' + (j.codeName || j.error || 'KO') : '✓ ok'), !isErr);
-      if (isErr) nKo++; else nOk++;
-    } catch(e) { setCompat(name, false, e.message); addRow('compat', name + ' : ❌ ' + e.message, false); nKo++; }
+function setSplitCompat(engine, name, ok, detail) {
+  const el2 = document.querySelector('[data-test="' + engine + '-' + name + '"]');
+  if (!el2) return;
+  el2.className = 'compat-state ' + (ok ? 'ok' : 'err');
+  el2.textContent = ok ? '✓ OK' : '✗ KO';
+  if (detail) el2.title = detail;
+}
+
+async function runSplitTests() {
+  const btn = $('btn-compare');
+  if (btn) { btn.disabled = true; var oldT = btn.textContent; btn.textContent = '⏳ 28 tests en cours…'; }
+  document.querySelectorAll('.compat-state[data-engine]').forEach(p => { p.className='compat-state pending'; p.textContent='pending'; });
+  updateSplitScorecard('v1'); updateSplitScorecard('v2');
+  addRow('compat', 'Lancement de 28 tests (14 features × v1 + v2)…');
+  for (const t of SPLIT_TESTS) {
+    const [rv1, rv2] = await Promise.all([runOne(t.name, 'v1'), runOne(t.name, 'v2')]);
+    setSplitCompat('v1', t.name, rv1.ok, rv1.detail);
+    setSplitCompat('v2', t.name, rv2.ok, rv2.detail);
+    updateSplitScorecard('v1'); updateSplitScorecard('v2');
   }
-  addRow('compat', 'Bilan : ' + nOk + ' ✓ · ' + nKo + ' ❌', nKo === 0);
-  updateScorecard();
-  b.disabled = false; b.textContent = oldT;
-};
-updateScorecard();
+  addRow('compat', 'Tests compat v1 + v2 terminés', true);
+  if (btn) { btn.disabled = false; btn.textContent = oldT; }
+}
+
+buildSplitGrid('v1');
+buildSplitGrid('v2');
+updateSplitScorecard('v1'); updateSplitScorecard('v2');
+// Auto-run on page load (after a brief delay so the connection cards populate first)
+setTimeout(runSplitTests, 1500);
 
 // ─── Comparaison v1 vs v2 ───
 const COMPAT_TESTS_LIST = [
@@ -366,59 +391,5 @@ async function runOne(name, engine) {
   } catch (e) { return { ok: false, detail: e.message }; }
 }
 
-const btnCompare = $('btn-compare');
-if (btnCompare) btnCompare.onclick = async (ev) => {
-  const btn = ev.currentTarget; btn.disabled = true; const oldT = btn.textContent; btn.textContent = '⏳ 28 tests…';
-  const out = $('compare-out');
-  out.style.display = 'block';
-  while (out.firstChild) out.removeChild(out.firstChild);
 
-  const summary = el('div', 'compare-summary');
-  const s1 = el('div', 'compare-stat v1');
-  s1.appendChild(el('div', 'compare-stat-big', '…')); s1.appendChild(el('div', 'compare-stat-label', 'FerretDB v1.24'));
-  summary.appendChild(s1);
-  const s2 = el('div', 'compare-stat v2');
-  s2.appendChild(el('div', 'compare-stat-big', '…')); s2.appendChild(el('div', 'compare-stat-label', 'FerretDB v2.7'));
-  summary.appendChild(s2);
-  const sd = el('div', 'compare-stat delta');
-  sd.appendChild(el('div', 'compare-stat-big', '…')); sd.appendChild(el('div', 'compare-stat-label', 'Gain v2'));
-  summary.appendChild(sd);
-  out.appendChild(summary);
-
-  const table = el('table', 'compare-table');
-  const thead = el('thead'); const trh = el('tr');
-  trh.appendChild(el('th', null, 'Feature'));
-  trh.appendChild(el('th', 'engine-col v1', 'FerretDB v1'));
-  trh.appendChild(el('th', 'engine-col v2', 'FerretDB v2'));
-  trh.appendChild(el('th', 'engine-col', 'Δ'));
-  thead.appendChild(trh); table.appendChild(thead);
-  const tbody = el('tbody');
-  table.appendChild(tbody);
-  out.appendChild(table);
-
-  let nV1Ok = 0, nV2Ok = 0, nGain = 0;
-  for (const [name, label] of COMPAT_TESTS_LIST) {
-    const tr = el('tr');
-    tr.appendChild(el('td', 'feat', label));
-    const tdV1 = el('td', 'cell', '…'); tr.appendChild(tdV1);
-    const tdV2 = el('td', 'cell', '…'); tr.appendChild(tdV2);
-    const tdDelta = el('td', 'cell', '—'); tr.appendChild(tdDelta);
-    tbody.appendChild(tr);
-
-    const [rv1, rv2] = await Promise.all([runOne(name, 'v1'), runOne(name, 'v2')]);
-    tdV1.className = 'cell ' + (rv1.ok ? 'ok' : 'ko'); tdV1.textContent = rv1.ok ? '✓ OK' : '✗ ' + rv1.detail; tdV1.title = rv1.detail;
-    tdV2.className = 'cell ' + (rv2.ok ? 'ok' : 'ko'); tdV2.textContent = rv2.ok ? '✓ OK' : '✗ ' + rv2.detail; tdV2.title = rv2.detail;
-    if (rv1.ok) nV1Ok++;
-    if (rv2.ok) nV2Ok++;
-    if (!rv1.ok && rv2.ok) { tdDelta.className = 'cell gain'; tdDelta.textContent = '+ v2'; nGain++; }
-    else if (rv1.ok && !rv2.ok) { tdDelta.className = 'cell ko'; tdDelta.textContent = '- v2'; }
-    else { tdDelta.textContent = '='; }
-
-    s1.children[0].textContent = nV1Ok + '/' + COMPAT_TESTS_LIST.length;
-    s2.children[0].textContent = nV2Ok + '/' + COMPAT_TESTS_LIST.length;
-    sd.children[0].textContent = (nGain > 0 ? '+' : '') + nGain;
-  }
-
-  addRow('compare', 'v1=' + nV1Ok + '/14 · v2=' + nV2Ok + '/14 · gains v2: ' + nGain, true);
-  btn.disabled = false; btn.textContent = oldT;
-};
+$('btn-compare').onclick = runSplitTests;
